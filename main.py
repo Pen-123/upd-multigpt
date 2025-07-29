@@ -53,9 +53,9 @@ def generate_image_url(prompt: str) -> str:
 async def ai_call(prompt):
     messages = []
     if memory_enabled:
-        messages += [{"role": r, "content": t} for r,t in saved_memory[-MAX_MEMORY:]]
+        messages += [{"role": r, "content": t} for r, t in saved_memory[-MAX_MEMORY:]]
     if current_chat:
-        messages += [{"role": r, "content": t} for r,t in saved_chats.get(current_chat, [])]
+        messages += [{"role": r, "content": t} for r, t in saved_chats.get(current_chat, [])]
     messages.append({"role": "user", "content": prompt})
 
     date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")
@@ -105,14 +105,14 @@ async def on_message(m):
     if txt == "/help":
         return await m.channel.send(
             "**MultiGPT Commands**:\n"
-            "`/help` Show this menu\n"
-            "`/pa` | `/pd` Ping-only ON/OFF\n"
-            "`/ds` Reset settings\n"
-            "`/sc` Start saved chat | `/sco` Close chat | `/sc1`-`/sc5` Switch\n"
-            "`/vsc` View chats | `/csc` Clear chats\n"
-            "`/sm` | `/smo` Memory ON/OFF | `/vsm` View | `/csm` Clear\n"
-            "`/cur-llm` Show model | `/cha-llm <name>` Switch model\n"
-            "`/image [prompt]` Generate image from prompt"
+            "/help Show this menu\n"
+            "/pa | /pd Ping-only ON/OFF\n"
+            "/ds Reset settings\n"
+            "/sc Start saved chat | /sco Close chat | /sc1-/sc5 Switch\n"
+            "/vsc View chats | /csc Clear chats\n"
+            "/sm | /smo Memory ON/OFF | /vsm View | /csm Clear\n"
+            "/cur-llm Show model | /cha-llm <name> Switch model\n"
+            "/image [prompt] Generate image from prompt"
         )
 
     if txt == "/pa":
@@ -129,11 +129,11 @@ async def on_message(m):
         parts = txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
             current_llm = allowed_llms[parts[1]]
-            return await m.channel.send(f"✅ LLM switched to `{parts[1]}`")
+            return await m.channel.send(f"✅ LLM switched to {parts[1]}")
         return await m.channel.send("❌ Invalid — use one of: google-gemini, llama3‑8b, llama3‑70b")
     if txt == "/cur-llm":
-        key = next((k for k,v in allowed_llms.items() if v == current_llm), current_llm)
-        return await m.channel.send(f"🔍 Current LLM: `{key}`")
+        key = next((k for k, v in allowed_llms.items() if v == current_llm), current_llm)
+        return await m.channel.send(f"🔍 Current LLM: {key}")
 
     m_sc = re.match(r"^/sc([1-5])$", txt)
     if m_sc:
@@ -153,7 +153,7 @@ async def on_message(m):
         current_chat = None
         return await m.channel.send("📂 Closed chat")
     if txt == "/vsc":
-        return await m.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k,v in saved_chats.items()) or "No chats saved")
+        return await m.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k, v in saved_chats.items()) or "No chats saved")
     if txt == "/csc":
         saved_chats.clear()
         current_chat = None
@@ -166,15 +166,15 @@ async def on_message(m):
         memory_enabled = False
         return await m.channel.send("🧠 Memory OFF")
     if txt == "/vsm":
-        return await m.channel.send("\n".join(f"[{r}] {c}" for r,c in saved_memory) or "No memory saved")
+        return await m.channel.send("\n".join(f"[{r}] {c}" for r, c in saved_memory) or "No memory saved")
     if txt == "/csm":
         saved_memory.clear()
         return await m.channel.send("🧹 Memory cleared")
 
     if txt.lower().startswith("/image"):
-        parts = txt.split(" ",1)
+        parts = txt.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            return await m.channel.send("❗ Usage: `/image [prompt]`")
+            return await m.channel.send("❗ Usage: /image [prompt]")
         prompt = parts[1].strip()
         img_url = generate_image_url(prompt)
 
@@ -187,8 +187,9 @@ async def on_message(m):
             path = "temp.png"
             with open(path, "wb") as f:
                 f.write(data)
-            with open(path, "rb") as fp:
-                await m.channel.send(content=f"🖼️ Image for: **{prompt}**", attachments=[fp])
+
+            with open(path, "rb") as img_file:
+                await m.channel.send(content=f"🖼️ Image for: **{prompt}**", attachments=[("temp.png", img_file)])
             os.remove(path)
         except Exception as e:
             return await m.channel.send(f"❌ Image Error: {e}")

@@ -25,12 +25,13 @@ current_chat = None
 memory_enabled = False
 saved_memory = []
 
+# Cooldown system
 user_cooldowns = {}
 COOLDOWN_SECONDS = 5
 
+# Default & allowed LLMs
 default_llm = "llama-3.1-8b-instant"
 current_llm = default_llm
-
 allowed_llms = {
     "llama3‑70b": "llama-3.3-70b-versatile",
     "llama3‑8b": "llama-3.1-8b-instant",
@@ -38,7 +39,7 @@ allowed_llms = {
 }
 
 def reset_defaults():
-    global ping_only, current_chat, memory_enabled, saved_memory
+    global ping_only, current_chat, memory_enabled
     ping_only = True
     current_chat = None
     memory_enabled = False
@@ -47,15 +48,15 @@ def reset_defaults():
 def generate_image_url(prompt: str) -> str:
     return "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
 
-async def ai_call(prompt):
+async def ai_call(prompt: str) -> str:
     messages = []
-    if memory_enabled:
-        messages += [{"role": r, "content": t} for r,t in saved_memory[-MAX_MEMORY:]]
-    if current_chat:
-        messages += [{"role": r, "content": t} for r,t in saved_chats.get(current_chat, [])]
+    if memory_enabled and saved_memory:
+        messages += [{"role": r, "content": t} for r, t in saved_memory[-MAX_MEMORY:]]
+    if current_chat and current_chat in saved_chats:
+        messages += [{"role": r, "content": t} for r, t in saved_chats[current_chat]]
     messages.append({"role": "user", "content": prompt})
 
-    date = datetime.now(TZ_UAE).strftime("%Y‑%m‑%d")
+    date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")
     system_msg = {
         "role": "system",
         "content": (
@@ -71,17 +72,15 @@ async def ai_call(prompt):
         "temperature": 0.7,
         "max_tokens": 1024
     }
+
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            resp = await session.post(api_url, json=payload, headers=headers)
+    async with aiohttp.ClientSession() as session:
+        resp = await session.post(api_url, json=payload, headers=headers)
+        if resp.status != 200:
             text = await resp.text()
-            if resp.status != 200:
-                return f"❌ Error {resp.status}: {text}"
-            data = await resp.json()
-            return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"❌ Error: {e}"
+            return f"❌ Error {resp.status}: {text}"
+        data = await resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "❌ No content returned.")
 
 @bot.event
 async def on_ready():
@@ -95,44 +94,46 @@ async def on_message(m):
         return
 
     now = datetime.now().timestamp()
-    if now - user_cooldowns.get(m.author.id, 0) < COOLDOWN_SECONDS:
+    if now - user_cooldowns.get(m.author.id, 0, ) < COOLDOWN_SECONDS:
         return
     user_cooldowns[m.author.id] = now
 
     txt = m.content.strip()
+
     if txt == "/help":
         return await m.channel.send(
             "**MultiGPT Commands**:\n"
-            "`/help` Show menu\n"
-            "`/pa` / `pd` Ping-only ON/OFF\n"
-            "`/ds` Reset settings\n"
-            "`/sc` / `/sco` / `/sc1`-`/sc5` Manage chats\n"
-            "`/vsc` / `/csc` View / clear chats\n"
-            "`/sm` / `smo` / `vsm` / `csm` Memory controls\n"
-            "`/cur-llm` Show model\n"
-            "`/cha-llm <name>` Change model\n"
-            "`/image [prompt]` Generate image"
+            "/help – show help\n"
+            "/pa | /pd – ping-only ON/OFF\n"
+            "/ds – reset defaults\n"
+            "/sc | /sco | /sc1–/sc5 – saved chat slots\n"
+            "/vsc | /csc – view/clear chats\n"
+            "/sm | /smo | /vsm | /csm – memory controls\n"
+            "/cur-llm | /cha-llm <name> – view/change model\n"
+            "/image [prompt] – generate image"
         )
 
     if txt == "/pa":
-        ping_only = True; return await m.channel.send("✅ Ping-only mode ON.")
+        ping_only = True
+        return await m.channel.send("✅ Ping-only mode ON.")
     if txt == "/pd":
-        ping_only = False; return await m.channel.send("❌ Ping-only mode OFF.")
+        ping_only = False
+        return await m.channel.send("❌ Ping-only mode OFF.")
     if txt == "/ds":
-        reset_defaults()
-        current_llm = default_llm
+        reset_defaults(); current_llm = default_llm
         return await m.channel.send("🔁 Settings reset.")
     if txt.startswith("/cha-llm"):
         parts = txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
             current_llm = allowed_llms[parts[1]]
             return await m.channel.send(f"✅ LLM switched to `{parts[1]}`")
-        return await m.channel.send("❌ Invalid — use one of: google-gemini, llama3‑8b, llama3‑70b")
+        return await m.channel.send("❌ Invalid — use: google-gemini, llama3‑8b, llama3‑70b")
     if txt == "/cur-llm":
-        key = next((k for k,v in allowed_llms.items() if v == current_llm), current_llm)
+        key = next((k for k, v in allowed_llms.items() if v == current_llm), current_llm)
         return await m.channel.send(f"🔍 Current LLM: `{key}`")
 
-    if m_sc := re.match(r"^/sc([1-5])$", txt):
+    m_sc = re.match(r"^/sc([1-5])$", txt)
+    if m_sc:
         slot = int(m_sc.group(1))
         if slot in saved_chats:
             current_chat = slot
@@ -149,39 +150,46 @@ async def on_message(m):
         current_chat = None
         return await m.channel.send("📂 Closed chat")
     if txt == "/vsc":
-        return await m.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k,v in saved_chats.items()) or "No chats saved")
+        return await m.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k, v in saved_chats.items()) or "No chats saved")
     if txt == "/csc":
         saved_chats.clear()
         current_chat = None
         return await m.channel.send("🧹 Chats cleared")
 
     if txt == "/sm":
-        memory_enabled = True; return await m.channel.send("🧠 Memory ON")
+        memory_enabled = True
+        return await m.channel.send("🧠 Memory ON")
     if txt == "/smo":
-        memory_enabled = False; return await m.channel.send("🧠 Memory OFF")
+        memory_enabled = False
+        return await m.channel.send("🧠 Memory OFF")
     if txt == "/vsm":
-        return await m.channel.send("\n".join(f"[{r}] {c}" for r,c in saved_memory) or "No memory saved")
+        return await m.channel.send("\n".join(f"[{r}] {c}" for r, c in saved_memory) or "No memory saved")
     if txt == "/csm":
-        saved_memory.clear(); return await m.channel.send("🧹 Memory cleared")
+        saved_memory.clear()
+        return await m.channel.send("🧹 Memory cleared")
 
+    # IMAGE COMMAND
     if txt.lower().startswith("/image"):
-        parts = txt.split(" ",1)
-        if len(parts)<2 or not parts[1].strip():
+        parts = txt.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
             return await m.channel.send("❗ Usage: `/image [prompt]`")
         prompt = parts[1].strip()
         img_url = generate_image_url(prompt)
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(img_url) as resp:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(img_url) as resp:
                     if resp.status != 200:
                         return await m.channel.send("❌ Failed to fetch image.")
                     data = await resp.read()
-            path = "temp.png"
-            with open(path, "wb") as f:
+            temp = "temp_poll.png"
+            with open(temp, "wb") as f:
                 f.write(data)
-            file = guilded.File(path)
-            await m.channel.send(content=f"🖼️ Image for: **{prompt}**", attachments=[file])
-            os.remove(path)
+            with open(temp, "rb") as fp:
+                await m.channel.send(
+                    content=f"🖼️ Image: **{prompt}**",
+                    attachments=[fp]
+                )
+            os.remove(temp)
         except Exception as e:
             return await m.channel.send(f"❌ Image Error: {e}")
         return
@@ -196,7 +204,8 @@ async def on_message(m):
     if current_chat:
         saved_chats.setdefault(current_chat, []).append(("user", prompt))
     if memory_enabled:
-        if len(saved_memory)>=MAX_MEMORY: saved_memory.pop(0)
+        if len(saved_memory) >= MAX_MEMORY:
+            saved_memory.pop(0)
         saved_memory.append(("user", prompt))
 
     thinking = await m.channel.send("🤖 Thinking...")
@@ -208,7 +217,7 @@ async def on_message(m):
     if memory_enabled:
         saved_memory.append(("assistant", response))
 
-# Uptime Robot endpoints
+# Uptime robot endpoints
 async def handle_root(req): return web.Response(text="✅ Bot running!")
 async def handle_health(req): return web.Response(text="OK")
 

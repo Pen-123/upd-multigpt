@@ -34,9 +34,9 @@ default_llm = "llama-3.1-8b-instant"
 current_llm = default_llm
 
 allowed_llms = {
-    "llama3‑70b": "llama-3.3-70b-versatile",
-    "llama3‑8b": "llama-3.1-8b-instant",
-    "google‑gemini": "gemma2-9b-it"
+    "llama3 -70b": "llama-3.3-70b-versatile",
+    "llama3 -8b": "llama-3.1-8b-instant",
+    "google -gemini": "gemma2-9b-it"
 }
 
 def reset_defaults():
@@ -103,9 +103,29 @@ async def on_message(m):
     txt = m.content.strip()
     if txt == "/help":
         return await m.channel.send(
-            "**MultiGPT Commands**:\n"
-            "`/help`, `/pa` ON `/pd` OFF, `/ds`, `/sc` `/sco`, `/sc1-5`, `/vsc`, `/csc`,\n"
-            "`/sm` `/smo`, `/vsm`, `/csm`, `/cur-llm`, `/cha-llm <name>`, `/image [prompt]`"
+            "**🧠 MultiGPT Help Menu**\n\n"
+            "**General Commands:**\n"
+            "`/help` → Show this help menu.\n"
+            "`/cur-llm` → Show the current AI model in use.\n"
+            "`/cha-llm <name>` → Change the AI model. Example: `/cha-llm deepseek`.\n\n"
+            "`/pa` → Activates Ping Mode.\n"
+            "`/pd` → Deactivates Ping Mode.\n\n"
+            "**Saved Memory (SM):**\n"
+            "`/sm` → Enable Saved Memory (remembers your messages + tone).\n"
+            "`/smo` → Disable Saved Memory.\n"
+            "`/vsm` → View current saved chats.\n"
+            "`/csm` → Clear saved memory.\n\n"
+            "**Saved Chats (SC):**\n"
+            "`/sc` → Enable saved chats.\n"
+            "`/sco` → Disable saved chats.\n"
+            "`/vsc` → View saved chats.\n"
+            "`/csc` → Clear saved chats + saved chat memory.\n"
+            "`/sc1` - `/sc5` → Load saved chats slots 1 to 5.\n\n"
+            "**Image Generation:**\n"
+            "`/image [prompt]` → Generate an AI image based on your prompt. Example:\n"
+            "`/image a cyberpunk cat eating ramen in 2077 Tokyo`\n"
+            "⚠️ Note: Sends a link to the image, not the image itself (for now).\n\n"
+            "🔧 More features coming soon. "
         )
 
     if txt == "/pa":

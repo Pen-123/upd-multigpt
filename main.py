@@ -4,7 +4,7 @@ import re
 import urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from io import BytesIO
+
 import guilded
 import aiohttp
 from aiohttp import web
@@ -158,19 +158,7 @@ async def on_message(m):
             return await m.channel.send("❗ Usage: `/image [prompt]`")
         prompt = parts[1].strip()
         img_url = generate_image_url(prompt)
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(img_url) as resp:
-                    if resp.status != 200:
-                        return await m.channel.send("❌ Failed to fetch image.")
-                    img_bytes = await resp.read()
-            img_file = BytesIO(img_bytes)
-            img_file.name = "image.png"
-            await m.channel.send(content=f"🖼️ Image for: **{prompt}**", file=guilded.File(img_file))
-        except Exception as e:
-            return await m.channel.send(f"❌ Image Error: {e}")
-        return
+        return await m.channel.send(f"🖼️ Image for: **{prompt}**\n{img_url}")
 
     if ping_only and bot.user.mention not in txt:
         return

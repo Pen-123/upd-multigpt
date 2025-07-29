@@ -37,7 +37,7 @@ current_llm = default_llm
 allowed_llms = {
   "llama3‑70b": "llama-3.3-70b-versatile",
   "llama3‑8b": "llama-3.1-8b-instant",
-  "gemma2":   "gemma2-9b-it"
+  "google-gemini":   "gemma2-9b-it"
 }
 
 def reset_defaults():
@@ -90,7 +90,7 @@ async def ai_call(prompt):
 
 @bot.event
 async def on_ready():
-    print(f"✅ PenGPT (Groq edition) ready as {bot.user.name}")
+    print(f"✅ PenGPT (Groq Edition) ready as {bot.user.name}")
 
 @bot.event
 async def on_message(m):
@@ -126,7 +126,7 @@ async def on_message(m):
         if len(parts) == 2 and parts[1] in allowed_llms:
             current_llm = allowed_llms[parts[1]]
             return await m.channel.send(f"✅ LLM changed to `{parts[1]}`")
-        return await m.channel.send("❌ Use one of: deepseek, llama3, mistral")
+        return await m.channel.send("❌ Use one of: google-gemini, llama3‑8b, llama3‑70b")
     if txt == "/cur-llm":
         key = next((k for k, v in allowed_llms.items() if v == current_llm), current_llm)
         return await m.channel.send(f"🔍 Current LLM: `{key}`")

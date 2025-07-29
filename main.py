@@ -30,14 +30,14 @@ user_cooldowns = {}
 COOLDOWN_SECONDS = 5
 
 # Default LLM
-default_llm = "mixtral-8x7b-32768"
+default_llm = "llama-3.1-8b-instant"
 current_llm = default_llm
 
 # Allowed LLMs
 allowed_llms = {
-    "deepseek": "deepseek-llm-7b",
-    "llama3": "llama3-70b-8192",
-    "mistral": "mixtral-8x7b-32768"
+  "llama3‑70b": "llama-3.3-70b-versatile",
+  "llama3‑8b": "llama-3.1-8b-instant",
+  "gemma2":   "gemma2-9b-it"
 }
 
 def reset_defaults():

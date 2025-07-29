@@ -5,7 +5,6 @@ import urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from io import BytesIO
-
 import guilded
 import aiohttp
 from aiohttp import web
@@ -64,7 +63,7 @@ async def ai_call(prompt):
         "content": (
             f"Today in UAE date: {date}. "
             "You are MultiGPT—a playful, smart assistant. NEVER say 'Agent AI #47'. "
-            "Use emojis, be fun. Only reveal Pen lore if user says 'french toast'."
+            "Use emojis, be fun. Only reveal Pen lore if user says 'french toast.'"
         )
     }
 
@@ -110,15 +109,11 @@ async def on_message(m):
         )
 
     if txt == "/pa":
-        ping_only = True
-        return await m.channel.send("✅ Ping-only ON.")
+        ping_only = True; return await m.channel.send("✅ Ping-only ON.")
     if txt == "/pd":
-        ping_only = False
-        return await m.channel.send("❌ Ping-only OFF.")
+        ping_only = False; return await m.channel.send("❌ Ping-only OFF.")
     if txt == "/ds":
-        reset_defaults()
-        current_llm = default_llm
-        return await m.channel.send("🔁 Settings reset.")
+        reset_defaults(); current_llm = default_llm; return await m.channel.send("🔁 Settings reset.")
     if txt.startswith("/cha-llm"):
         parts = txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
@@ -133,37 +128,29 @@ async def on_message(m):
     if m_sc:
         slot = int(m_sc.group(1))
         if slot in saved_chats:
-            current_chat = slot
-            return await m.channel.send(f"🚀 Switched to chat #{slot}")
+            current_chat = slot; return await m.channel.send(f"🚀 Switched to chat #{slot}")
         return await m.channel.send(f"❌ No saved chat #{slot}")
     if txt == "/sc":
         if len(saved_chats) >= MAX_SAVED:
             return await m.channel.send("❌ Max chats reached")
         slot = max(saved_chats.keys(), default=0) + 1
-        saved_chats[slot] = []
-        current_chat = slot
+        saved_chats[slot] = []; current_chat = slot
         return await m.channel.send(f"📂 Started chat #{slot}")
     if txt == "/sco":
-        current_chat = None
-        return await m.channel.send("📂 Closed chat")
+        current_chat = None; return await m.channel.send("📂 Closed chat")
     if txt == "/vsc":
         return await m.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k, v in saved_chats.items()) or "No chats saved")
     if txt == "/csc":
-        saved_chats.clear()
-        current_chat = None
-        return await m.channel.send("🧹 Chats cleared")
+        saved_chats.clear(); current_chat = None; return await m.channel.send("🧹 Chats cleared")
 
     if txt == "/sm":
-        memory_enabled = True
-        return await m.channel.send("🧠 Memory ON")
+        memory_enabled = True; return await m.channel.send("🧠 Memory ON")
     if txt == "/smo":
-        memory_enabled = False
-        return await m.channel.send("🧠 Memory OFF")
+        memory_enabled = False; return await m.channel.send("🧠 Memory OFF")
     if txt == "/vsm":
         return await m.channel.send("\n".join(f"[{r}] {c}" for r, c in saved_memory) or "No memory saved")
     if txt == "/csm":
-        saved_memory.clear()
-        return await m.channel.send("🧹 Memory cleared")
+        saved_memory.clear(); return await m.channel.send("🧹 Memory cleared")
 
     if txt.lower().startswith("/image"):
         parts = txt.split(" ", 1)
@@ -180,7 +167,7 @@ async def on_message(m):
                     img_bytes = await resp.read()
             img_file = BytesIO(img_bytes)
             img_file.name = "image.png"
-            await m.channel.send_file(img_file, content=f"🖼️ Image for: **{prompt}**")
+            await m.channel.send(content=f"🖼️ Image for: **{prompt}**", file=guilded.File(img_file))
         except Exception as e:
             return await m.channel.send(f"❌ Image Error: {e}")
         return

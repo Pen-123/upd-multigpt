@@ -48,6 +48,11 @@ def reset_defaults():
     memory_enabled = False
     saved_memory = []
 
+def generate_image_url(prompt: str) -> str:
+    base_url = "https://image.pollinations.ai/prompt/"
+    encoded_prompt = urllib.parse.quote(prompt)
+    return f"{base_url}{encoded_prompt}"
+
 async def ai_call(prompt):
     messages = []
     if memory_enabled and saved_memory:
@@ -89,11 +94,6 @@ async def ai_call(prompt):
             return data.get("choices", [{}])[0].get("message", {}).get("content", "❌ No content returned.")
     except Exception as e:
         return f"❌ Error: {str(e)}"
-
-def generate_image_url(prompt: str) -> str:
-    base_url = "https://image.pollinations.ai/prompt/"
-    encoded_prompt = urllib.parse.quote(prompt)
-    return f"{base_url}{encoded_prompt}"
 
 @bot.event
 async def on_ready():
@@ -170,15 +170,22 @@ async def on_message(m):
         prompt = parts[1].strip()
         img_url = generate_image_url(prompt)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(img_url) as resp:
-                if resp.status != 200:
-                    return await m.channel.send("❌ Failed to fetch image.")
-                image_data = await resp.read()
-                with open("temp_image.png", "wb") as f:
-                    f.write(image_data)
-                await m.channel.send(file=guilded.File("temp_image.png"))
-                os.remove("temp_image.png")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(img_url) as resp:
+                    if resp.status != 200:
+                        return await m.channel.send("❌ Failed to fetch image.")
+                    image_data = await resp.read()
+                    temp_path = "temp_image.png"
+                    with open(temp_path, "wb") as f:
+                        f.write(image_data)
+                    await m.channel.send(
+                        content=f"🖼️ Image for: **{prompt}**",
+                        file=guilded.File(temp_path)
+                    )
+                    os.remove(temp_path)
+        except Exception as e:
+            return await m.channel.send(f"❌ Image Error: `{str(e)}`")
         return
 
     if ping_only and bot.user.mention not in txt:

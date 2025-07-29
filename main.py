@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import guilded
 import aiohttp
 from aiohttp import web
-import urllib.parse  # For safe URL encoding
+import urllib.parse
 
 # Config
 token = os.getenv("GUILDED_TOKEN")
@@ -36,8 +36,8 @@ current_llm = default_llm
 
 # Allowed LLMs
 allowed_llms = {
-  "llama3‑70b": "llama-3.3-70b-versatile",
-  "llama3‑8b": "llama-3.1-8b-instant",
+  "llama3 -70b": "llama-3.3-70b-versatile",
+  "llama3 -8b": "llama-3.1-8b-instant",
   "google-gemini": "gemma2-9b-it"
 }
 
@@ -46,6 +46,7 @@ def reset_defaults():
     ping_only = True
     current_chat = None
     memory_enabled = False
+    saved_memory = []
 
 async def ai_call(prompt):
     messages = []
@@ -112,7 +113,6 @@ async def on_message(m):
 
     txt = m.content.strip()
 
-    # COMMANDS
     if txt == "/help":
         help_txt = (
             "**PenGPT Commands**:\n"
@@ -135,7 +135,7 @@ async def on_message(m):
         if len(parts) == 2 and parts[1] in allowed_llms:
             current_llm = allowed_llms[parts[1]]
             return await m.channel.send(f"✅ LLM changed to `{parts[1]}`")
-        return await m.channel.send("❌ Use one of: google-gemini, llama3‑8b, llama3‑70b")
+        return await m.channel.send("❌ Use one of: google-gemini, llama3 -8b, llama3 -70b")
     if txt == "/cur-llm":
         key = next((k for k, v in allowed_llms.items() if v == current_llm), current_llm)
         return await m.channel.send(f"🔍 Current LLM: `{key}`")
@@ -153,7 +153,7 @@ async def on_message(m):
         slot = max(saved_chats.keys(), default=0) + 1
         saved_chats[slot] = []
         current_chat = slot
-        return await m.channel.send(f"💾 Started chat #{slot}")
+        return await m.channel.send(f"📂 Started chat #{slot}")
     if txt == "/sco": current_chat = None; return await m.channel.send("📂 Closed chat")
     if txt == "/vsc": return await m.channel.send("\n".join([f"#{k}: {len(v)} msgs" for k,v in saved_chats.items()]) or "No chats saved")
     if txt == "/csc": saved_chats.clear(); current_chat = None; return await m.channel.send("🧹 Chats cleared")
@@ -163,14 +163,23 @@ async def on_message(m):
     if txt == "/vsm": return await m.channel.send("\n".join([f"[{r}] {c}" for r,c in saved_memory]) or "No memory saved")
     if txt == "/csm": saved_memory.clear(); return await m.channel.send("🧹 Memory cleared")
 
-    # IMAGE GENERATION COMMAND
     if txt.lower().startswith("/image"):
         parts = txt.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             return await m.channel.send("❗ Usage: `/image [prompt]`")
         prompt = parts[1].strip()
         img_url = generate_image_url(prompt)
-        return await m.channel.send(f"🖼️ Generated image for prompt: **{prompt}**\n{img_url}")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(img_url) as resp:
+                if resp.status != 200:
+                    return await m.channel.send("❌ Failed to fetch image.")
+                image_data = await resp.read()
+                with open("temp_image.png", "wb") as f:
+                    f.write(image_data)
+                await m.channel.send(file=guilded.File("temp_image.png"))
+                os.remove("temp_image.png")
+        return
 
     if ping_only and bot.user.mention not in txt:
         return
@@ -195,7 +204,6 @@ async def on_message(m):
     if memory_enabled:
         saved_memory.append(("assistant", response))
 
-# Uptime Robot Port
 async def handle_root(req): return web.Response(text="✅ Bot running!")
 async def handle_health(req): return web.Response(text="OK")
 

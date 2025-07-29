@@ -1,3 +1,2 @@
 guilded.py
 aiohttp
-flask

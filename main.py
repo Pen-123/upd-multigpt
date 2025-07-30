@@ -28,6 +28,7 @@ saved_memory = []
 # Cooldown system
 user_cooldowns = {}
 COOLDOWN_SECONDS = 5
+user_needs_to_continue = set()
 
 # Default LLM
 default_llm = "llama-3.1-8b-instant"
@@ -53,7 +54,7 @@ async def ai_call(prompt):
     messages = []
     memory_msgs = saved_memory[-MAX_MEMORY:] if memory_enabled else []
     chat_msgs = saved_chats.get(current_chat, []) if current_chat else []
-    
+
     seen_responses = set()
     for role, content in memory_msgs + chat_msgs:
         if (role, content) not in seen_responses:
@@ -106,6 +107,14 @@ async def on_message(m):
     user_cooldowns[m.author.id] = now
 
     txt = m.content.strip()
+
+    if m.author.id in user_needs_to_continue and not txt.startswith("/go"):
+        return await m.channel.send("⏸️ I'm paused! Type `/go` to continue.")
+
+    if txt == "/go":
+        user_needs_to_continue.discard(m.author.id)
+        return await m.channel.send("▶️ MultiGPT resumed.")
+
     if txt == "/help":
         return await m.channel.send(
             "**🧠 MultiGPT Help Menu**\n\n"
@@ -207,6 +216,8 @@ async def on_message(m):
         saved_chats[current_chat].append(("assistant", response))
     if memory_enabled:
         saved_memory.append(("assistant", response))
+
+    user_needs_to_continue.add(m.author.id)
 
 # Uptime endpoints
 async def handle_root(req): return web.Response(text="✅ Bot running!")

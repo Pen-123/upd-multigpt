@@ -36,7 +36,7 @@ current_llm = default_llm
 allowed_llms = {
     "llama3-70b": "llama-3.3-70b-versatile",
     "llama3-8b": "llama-3.1-8b-instant",
-    "gemma2b": "gemma2-9b-it"
+    "gemma": "gemma2-9b-it"
 }
 
 def reset_defaults():
@@ -51,10 +51,15 @@ def generate_image_url(prompt: str) -> str:
 
 async def ai_call(prompt):
     messages = []
-    if memory_enabled and saved_memory:
-        messages += [{"role": r, "content": t} for r, t in saved_memory[-MAX_MEMORY:]]
-    if current_chat and current_chat in saved_chats:
-        messages += [{"role": r, "content": t} for r, t in saved_chats[current_chat]]
+    memory_msgs = saved_memory[-MAX_MEMORY:] if memory_enabled else []
+    chat_msgs = saved_chats.get(current_chat, []) if current_chat else []
+    
+    seen_responses = set()
+    for role, content in memory_msgs + chat_msgs:
+        if (role, content) not in seen_responses:
+            seen_responses.add((role, content))
+            messages.append({"role": role, "content": content})
+
     messages.append({"role": "user", "content": prompt})
 
     date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")

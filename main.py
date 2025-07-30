@@ -113,7 +113,7 @@ async def on_message(m):
             "**General Commands:**\n"
             "`/help` → Show this help menu.\n"
             "`/cur-llm` → Show the current AI model in use.\n"
-            "`/cha-llm <name>` → Change the AI model. Example: `/cha-llm deepseek`.\n\n"
+            "`/cha-llm <name>` → Change the AI model. Example: `/cha-llm deepseek-r1`.\n\n"
             "`/pa` → Activates Ping Mode.\n"
             "`/pd` → Deactivates Ping Mode.\n\n"
             "**Saved Memory (SM):**\n"

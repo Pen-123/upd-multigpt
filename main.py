@@ -36,7 +36,7 @@ current_llm = default_llm
 allowed_llms = {
     "llama3-70b": "llama-3.3-70b-versatile",
     "llama3-8b": "llama-3.1-8b-instant",
-    "gemma": "gemma2-9b-it"
+    "deepseek-r1": "deepseek-r1-distill-llama-70b"
 }
 
 def reset_defaults():

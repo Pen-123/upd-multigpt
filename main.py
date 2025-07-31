@@ -30,7 +30,7 @@ user_cooldowns = {}
 COOLDOWN_SECONDS = 5
 
 # Default LLM
-default_llm = "llama-3.1-8b-instant"
+default_llm = "moonshotai/kimi-k2-instruct"
 current_llm = default_llm
 
 allowed_llms = {

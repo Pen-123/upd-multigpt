@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import guilded
 import aiohttp
 from aiohttp import web
-import requests  # Added for fetching GitHub archive
+import requests
 
 # Config
 token = os.getenv("GUILDED_TOKEN")
@@ -40,6 +40,7 @@ allowed_llms = {
     "kimi-k2": "moonshotai/kimi-k2-instruct"
 }
 
+
 def load_pen_archive_from_github():
     url = "https://raw.githubusercontent.com/Pen-123/new-pengpt/main/archives.txt"
     try:
@@ -64,8 +65,10 @@ def reset_defaults():
     memory_enabled = False
     saved_memory.clear()
 
+
 def generate_image_url(prompt: str) -> str:
     return "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+
 
 async def ai_call(prompt):
     messages = []
@@ -108,9 +111,11 @@ async def ai_call(prompt):
     except Exception as e:
         return f"❌ Error: {e}"
 
+
 @bot.event
 async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
+
 
 @bot.event
 async def on_message(m):
@@ -129,36 +134,53 @@ async def on_message(m):
     if txt == "/help":
         return await m.channel.send(
             "**🧠 MultiGPT Help Menu**\n\n"
+            "**How to Talk to the Bot:**\n"
+            "`@MultiGPT V3 <your message>` → Ask the bot anything!\n\n"
             "**General Commands:**\n"
             "`/help` → Show this help menu.\n"
             "`/cur-llm` → Show the current AI model in use.\n"
-            "`/cha-llm <name>` → Change the AI model. Example: `/cha-llm deepseek-r1`.\n\n"
+            "`/cha-llm <name>` → Manually change AI model.\n"
+            "`/fast` → Use fast model (kimi-k2)\n"
+            "`/smart` → Use smart model (llama3-70b)\n"
             "`/pa` → Activates Ping Mode.\n"
-            "`/pd` → Deactivates Ping Mode.\n\n"
+            "`/pd` → Deactivates Ping Mode.\n"
+            "`/ds` → Soft reset (ping-only ON, memory OFF, default LLM).\n\n"
             "**Saved Memory (SM):**\n"
-            "`/sm` → Enable Saved Memory (remembers your messages + tone).\n"
-            "`/smo` → Disable Saved Memory.\n"
-            "`/vsm` → View current saved chats.\n"
-            "`/csm` → Clear saved memory.\n\n"
+            "`/sm` → Enable memory.\n"
+            "`/smo` → Turn off memory.\n"
+            "`/vsm` → View memory.\n"
+            "`/csm` → Clear memory.\n\n"
             "**Saved Chats (SC):**\n"
-            "`/sc` → Enable saved chats.\n"
-            "`/sco` → Disable saved chats.\n"
-            "`/vsc` → View saved chats.\n"
-            "`/csc` → Clear saved chats + saved chat memory.\n"
-            "`/sc1` - `/sc5` → Load saved chats slots 1 to 5.\n\n"
+            "`/sc` → Start a saved chat slot.\n"
+            "`/sco` → Close current saved chat.\n"
+            "`/vsc` → View all saved chats.\n"
+            "`/csc` → Clear all saved chats.\n"
+            "`/sc1` - `/sc5` → Load saved chat slot 1-5.\n\n"
             "**Image Generation:**\n"
-            "`/image [prompt]` → Generate an AI image based on your prompt. Example:\n"
-            "`/image a cyberpunk cat eating ramen in 2077 Tokyo`\n"
-            "⚠️ Note: Sends a link to the image, not the image itself (for now).\n\n"
-            "🔧 More features coming soon. "
+            "`/image [prompt]` → Generate an image.\n"
+            "Example: `/image a robot drinking boba at the beach`\n"
+            "⚠️ Sends a link to the image (not embedded).\n\n"
+            "🔧 More features coming soon!"
         )
 
     if txt == "/pa":
         ping_only = True; return await m.channel.send("✅ Ping-only ON.")
     if txt == "/pd":
         ping_only = False; return await m.channel.send("❌ Ping-only OFF.")
+
+    # Soft reset: resets ping/memory/LLM, but keeps chats
     if txt == "/ds":
-        reset_defaults(); current_llm = default_llm; return await m.channel.send("🔁 Settings reset.")
+        reset_defaults()
+        current_llm = default_llm
+        return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, default LLM).")
+
+    # Secret hard reset: wipes everything (settings + chats + memory)
+    if txt == "/re":
+        reset_defaults()
+        current_llm = default_llm
+        saved_chats.clear()
+        return await m.channel.send("💣 Hard reset complete — everything wiped.")
+
     if txt.startswith("/cha-llm"):
         parts = txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
@@ -168,6 +190,12 @@ async def on_message(m):
     if txt == "/cur-llm":
         key = next((k for k, v in allowed_llms.items() if v == current_llm), current_llm)
         return await m.channel.send(f"🔍 Current LLM: `{key}`")
+    if txt == "/fast":
+        current_llm = allowed_llms["kimi-k2"]
+        return await m.channel.send("⚡ Switched to FAST mode (kimi-k2)")
+    if txt == "/smart":
+        current_llm = allowed_llms["llama3-70b"]
+        return await m.channel.send("🧠 Switched to SMART mode (llama3-70b)")
 
     m_sc = re.match(r"^/sc([1-5])$", txt)
     if m_sc:

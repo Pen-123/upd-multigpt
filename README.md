@@ -3,7 +3,7 @@
 
 Just want the bot without doing any coding?
 Use the official version here:
-🔗 Original Bot Link
+🔗 https://www.guilded.gg/b/79e91509-8031-4053-9d78-177c3246c786
 (Perfect if you don’t want to mess with setup stuff)
 🛠️ Option 2: Customize the Bot (Advanced Setup)
 

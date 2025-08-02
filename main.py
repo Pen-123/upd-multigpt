@@ -4,6 +4,7 @@ import re
 import urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import tempfile
 
 import guilded
 import aiohttp
@@ -13,7 +14,7 @@ import requests
 # Config
 token = os.getenv("GUILDED_TOKEN")
 api_key = os.getenv("GROQ_API_KEY")
-hf_token = os.getenv("HF_TOKEN")  # Hugging Face token
+hf_token = os.getenv("HF_TOKEN")
 api_url = "https://api.groq.com/openai/v1/chat/completions"
 MAX_SAVED = 5
 MAX_MEMORY = 50
@@ -27,16 +28,14 @@ current_chat = None
 memory_enabled = False
 saved_memory = []
 
-# Default LLM
+# LLM setup
 default_llm = "moonshotai/kimi-k2-instruct"
 current_llm = default_llm
-
 allowed_llms = {
     "llama3-70b": "llama-3.3-70b-versatile",
     "llama3-8b": "llama-3.1-8b-instant",
     "kimi-k2": "moonshotai/kimi-k2-instruct"
 }
-
 
 def load_pen_archive_from_github():
     url = "https://raw.githubusercontent.com/Pen-123/new-pengpt/main/archives.txt"
@@ -54,14 +53,12 @@ def load_pen_archive_from_github():
 
 pen_archive = load_pen_archive_from_github()
 
-
 def reset_defaults():
     global ping_only, current_chat, memory_enabled, saved_memory
     ping_only = True
     current_chat = None
     memory_enabled = False
     saved_memory.clear()
-
 
 async def ai_call(prompt):
     messages = []
@@ -75,8 +72,8 @@ async def ai_call(prompt):
             messages.append({"role": role, "content": content})
 
     messages.append({"role": "user", "content": prompt})
-
     date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")
+
     system_msg = {
         "role": "system",
         "content": (
@@ -94,6 +91,7 @@ async def ai_call(prompt):
         "max_tokens": 1024
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
     try:
         async with aiohttp.ClientSession() as session:
             resp = await session.post(api_url, json=payload, headers=headers)
@@ -104,11 +102,9 @@ async def ai_call(prompt):
     except Exception as e:
         return f"❌ Error: {e}"
 
-
 @bot.event
 async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
-
 
 @bot.event
 async def on_message(m):
@@ -119,7 +115,6 @@ async def on_message(m):
 
     txt = m.content.strip()
 
-    # Basic commands
     if txt == "/help":
         return await m.channel.send(
             "**🧠 MultiGPT Help Menu**\n"
@@ -143,15 +138,12 @@ async def on_message(m):
             "`/image [prompt]` generate art with SDXL 1.0"
         )
 
-    # Ping-only toggles
     if txt == "/pa":
         ping_only = True
         return await m.channel.send("✅ Ping-only ON.")
     if txt == "/pd":
         ping_only = False
         return await m.channel.send("❌ Ping-only OFF.")
-
-    # Reset commands
     if txt == "/ds":
         reset_defaults()
         current_llm = default_llm
@@ -161,8 +153,6 @@ async def on_message(m):
         current_llm = default_llm
         saved_chats.clear()
         return await m.channel.send("💣 Hard reset complete — all wiped.")
-
-    # LLM commands
     if txt.startswith("/cha-llm"):
         parts = txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
@@ -205,7 +195,6 @@ async def on_message(m):
         current_chat = None
         return await m.channel.send("🧹 Chats cleared")
 
-    # Memory
     if txt == "/sm":
         memory_enabled = True
         return await m.channel.send("🧠 Memory ON")
@@ -219,7 +208,6 @@ async def on_message(m):
         saved_memory.clear()
         return await m.channel.send("🧹 Memory cleared")
 
-    # /image with SDXL 1.0
     if txt.lower().startswith("/image"):
         parts = txt.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -246,14 +234,16 @@ async def on_message(m):
                 json=payload,
                 headers=headers
             ) as resp:
-                if resp.status != 200:
+                content_type = resp.headers.get("Content-Type", "")
+                if "image" not in content_type:
                     err = await resp.text()
-                    return await thinking.edit(content=f"❌ HF Error {resp.status}: {err}")
+                    return await thinking.edit(content=f"❌ Unexpected content: {content_type}\n```\n{err[:300]}\n```")
+
                 img_data = await resp.read()
                 if not img_data:
                     return await thinking.edit(content="❌ No image data received.")
 
-                path = "/tmp/sdxl.png"
+                path = tempfile.mktemp(suffix=".png")
                 with open(path, "wb") as f:
                     f.write(img_data)
 
@@ -261,16 +251,13 @@ async def on_message(m):
         file = guilded.File(path, filename="sdxl.png")
         return await thinking.edit(content=None, embed=embed, file=file)
 
-    # If ping-only and not mentioned, ignore
     if ping_only and bot.user.mention not in txt:
         return
 
-    # Chat messages
     prompt = txt.replace(bot.user.mention, "").strip()
     if not prompt:
         return
 
-    # Save history
     if current_chat:
         saved_chats.setdefault(current_chat, []).append(("user", prompt))
     if memory_enabled:
@@ -287,8 +274,7 @@ async def on_message(m):
     if memory_enabled:
         saved_memory.append(("assistant", response))
 
-
-# Health checks
+# Web server
 async def handle_root(req): return web.Response(text="✅ Bot running! halal")
 async def handle_health(req): return web.Response(text="OK")
 

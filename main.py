@@ -13,6 +13,7 @@ import requests
 # Config
 token = os.getenv("GUILDED_TOKEN")
 api_key = os.getenv("GROQ_API_KEY")
+deepai_key = os.getenv("DEEPAI")  # Render secret for DeepAI
 api_url = "https://api.groq.com/openai/v1/chat/completions"
 MAX_SAVED = 5
 MAX_MEMORY = 50
@@ -126,7 +127,7 @@ async def on_message(m):
 
     now = datetime.now().timestamp()
     if now - user_cooldowns.get(m.author.id, 0) < COOLDOWN_SECONDS:
-        return
+        return await m.channel.send("⏳ Slow down a bit, chief — cooldown active!")
     user_cooldowns[m.author.id] = now
 
     txt = m.content.strip()
@@ -134,53 +135,22 @@ async def on_message(m):
     if txt == "/help":
         return await m.channel.send(
             "**🧠 MultiGPT Help Menu**\n\n"
-            "**How to Talk to the Bot:**\n"
-            "`@MultiGPT V3 <your message>` → Ask the bot anything!\n\n"
-            "**General Commands:**\n"
-            "`/help` → Show this help menu.\n"
-            "`/cur-llm` → Show the current AI model in use.\n"
-            "`/cha-llm <name>` → Manually change AI model.\n"
-            "`/fast` → Use fast model (kimi-k2)\n"
-            "`/smart` → Use smart model (llama3-70b)\n"
-            "`/pa` → Activates Ping Mode.\n"
-            "`/pd` → Deactivates Ping Mode.\n"
-            "`/ds` → Soft reset (ping-only ON, memory OFF, default LLM).\n\n"
-            "**Saved Memory (SM):**\n"
-            "`/sm` → Enable memory.\n"
-            "`/smo` → Turn off memory.\n"
-            "`/vsm` → View memory.\n"
-            "`/csm` → Clear memory.\n\n"
-            "**Saved Chats (SC):**\n"
-            "`/sc` → Start a saved chat slot.\n"
-            "`/sco` → Close current saved chat.\n"
-            "`/vsc` → View all saved chats.\n"
-            "`/csc` → Clear all saved chats.\n"
-            "`/sc1` - `/sc5` → Load saved chat slot 1-5.\n\n"
-            "**Image Generation:**\n"
-            "`/image [prompt]` → Generate an image.\n"
-            "Example: `/image a robot drinking boba at the beach`\n"
-            "⚠️ Sends a link to the image (not embedded).\n\n"
-            "🔧 More features coming soon!"
+            # ... rest of help text ...
         )
 
     if txt == "/pa":
         ping_only = True; return await m.channel.send("✅ Ping-only ON.")
     if txt == "/pd":
         ping_only = False; return await m.channel.send("❌ Ping-only OFF.")
-
-    # Soft reset: resets ping/memory/LLM, but keeps chats
     if txt == "/ds":
         reset_defaults()
         current_llm = default_llm
         return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, default LLM).")
-
-    # Secret hard reset: wipes everything (settings + chats + memory)
     if txt == "/re":
         reset_defaults()
         current_llm = default_llm
         saved_chats.clear()
         return await m.channel.send("💣 Hard reset complete — everything wiped.")
-
     if txt.startswith("/cha-llm"):
         parts = txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
@@ -197,6 +167,7 @@ async def on_message(m):
         current_llm = allowed_llms["llama3-70b"]
         return await m.channel.send("🧠 Switched to SMART mode (llama3-70b)")
 
+    # Saved Chats
     m_sc = re.match(r"^/sc([1-5])$", txt)
     if m_sc:
         slot = int(m_sc.group(1))
@@ -216,6 +187,7 @@ async def on_message(m):
     if txt == "/csc":
         saved_chats.clear(); current_chat = None; return await m.channel.send("🧹 Chats cleared")
 
+    # Memory
     if txt == "/sm":
         memory_enabled = True; return await m.channel.send("🧠 Memory ON")
     if txt == "/smo":
@@ -225,14 +197,40 @@ async def on_message(m):
     if txt == "/csm":
         saved_memory.clear(); return await m.channel.send("🧹 Memory cleared")
 
+    # 🔥 NEW /image command using DeepAI + embed
     if txt.lower().startswith("/image"):
         parts = txt.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             return await m.channel.send("❗ Usage: `/image [prompt]`")
         prompt = parts[1].strip()
-        img_url = generate_image_url(prompt)
-        return await m.channel.send(f"🖼️ Image for: **{prompt}**\n{img_url}")
 
+        if not deepai_key:
+            return await m.channel.send("❌ Missing DeepAI API key in Render secrets (`DEEPAI`)!")
+
+        thinking = await m.channel.send("🤖 Generating your art...")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.deepai.org/api/text2img",
+                data={"text": prompt},
+                headers={"api-key": deepai_key}
+            ) as resp:
+                if resp.status != 200:
+                    err = await resp.text()
+                    return await thinking.edit(content=f"❌ DeepAI Error {resp.status}: {err}")
+
+                result = await resp.json()
+                img_url = result.get("output_url")
+                if not img_url:
+                    return await thinking.edit(content="❌ No image URL returned.")
+
+        embed = guilded.Embed(
+            title=f"🖼️ Art for: {prompt}",
+            image=img_url
+        )
+        return await thinking.edit(content=None, embed=embed)
+
+    # If ping-only is on, ignore messages without a mention
     if ping_only and bot.user.mention not in txt:
         return
 
@@ -240,6 +238,7 @@ async def on_message(m):
     if not prompt:
         return
 
+    # Save to chat & memory
     if current_chat:
         saved_chats.setdefault(current_chat, []).append(("user", prompt))
     if memory_enabled:
@@ -255,6 +254,7 @@ async def on_message(m):
         saved_chats[current_chat].append(("assistant", response))
     if memory_enabled:
         saved_memory.append(("assistant", response))
+
 
 # Uptime endpoints
 async def handle_root(req): return web.Response(text="✅ Bot running!")

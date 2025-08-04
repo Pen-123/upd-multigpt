@@ -2,7 +2,6 @@ import os
 import asyncio
 import re
 import urllib.parse
-import io
 import aiohttp
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -16,6 +15,7 @@ token = os.getenv("GUILDED_TOKEN")
 api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
 api_keys = [key for key in api_keys if key]  # Filter out None values
 hf_token = os.getenv("HF_TOKEN")  # Hugging Face token
+imgbb_api_key = os.getenv("HF_IMAGES")  # Image hosting API key
 if not api_keys:
     print("FATAL: No GROQ_API_KEY or GROQ_API_KEY2 environment variables set!")
     exit(1)
@@ -50,7 +50,6 @@ allowed_llms = {
     "kimi-k2": "moonshotai/kimi-k2-instruct"
 }
 
-
 def load_pen_archive_from_github():
     url = "https://raw.githubusercontent.com/Pen-123/new-pengpt/main/archives.txt"
     try:
@@ -67,7 +66,6 @@ def load_pen_archive_from_github():
 
 pen_archive = load_pen_archive_from_github()
 
-
 def reset_defaults():
     global ping_only, current_chat, memory_enabled, saved_memory
     ping_only = True
@@ -75,10 +73,8 @@ def reset_defaults():
     memory_enabled = False
     saved_memory.clear()
 
-
 def generate_image_url(prompt: str) -> str:
     return "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
-
 
 async def generate_hf_image(prompt: str) -> bytes:
     """Generate image using Hugging Face's Stable Diffusion"""
@@ -102,6 +98,21 @@ async def generate_hf_image(prompt: str) -> bytes:
                 error = await response.text()
                 raise Exception(f"HF API error {response.status}: {error}")
 
+async def upload_image_to_hosting(image_data: bytes) -> str:
+    """Upload image to hosting service and return URL"""
+    if not imgbb_api_key:
+        raise Exception("Image hosting API key not configured")
+    
+    form_data = aiohttp.FormData()
+    form_data.add_field('image', image_data, filename='image.png', content_type='image/png')
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f'https://api.imgbb.com/1/upload?key={imgbb_api_key}', data=form_data) as resp:
+            data = await resp.json()
+            if data.get('success'):
+                return data['data']['url']
+            else:
+                raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 def rotate_api_key():
     """Rotate through available API keys"""
@@ -109,7 +120,6 @@ def rotate_api_key():
     key = api_keys[key_index]
     key_index = (key_index + 1) % len(api_keys)
     return key
-
 
 async def ai_call(prompt):
     messages = []
@@ -135,7 +145,6 @@ async def ai_call(prompt):
         )
     }
 
-    # Use rotated API key
     current_key = rotate_api_key()
     
     payload = {
@@ -155,13 +164,18 @@ async def ai_call(prompt):
     except Exception as e:
         return f"❌ Error: {e}"
 
-
 @bot.event
 async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
     print(f"🔑 Using {len(api_keys)} API keys")
     print(f"🎨 Image modes: Fast (Pollinations) & Smart (Hugging Face)")
-
+    await bot.change_presence(
+        activity=guilded.Activity(
+            type=guilded.ActivityType.CUSTOM,
+            name="✨ Ask me anything!",
+            state="/help for commands"
+        )
+    )
 
 @bot.event
 async def on_message(m):
@@ -204,10 +218,9 @@ async def on_message(m):
             "`/sc1` - `/sc5` → Load saved chat slot 1-5.\n\n"
             "**Image Generation:**\n"
             "`/image [prompt]` → Generate an image\n"
-            "• Uses current mode (Fast/Smart)\n"
-            "• Fast: Pollinations.ai (quick)\n"
-            "• Smart: Hugging Face (high quality)\n"
-            "🖼️ Embedded image after 5 seconds\n\n"
+            "• Fast mode: Pollinations.ai URL\n"
+            "• Smart mode: Embedded HQ image\n"
+            "🖼️ 5 second generation time\n\n"
             "🔧 More features coming soon!"
         )
 
@@ -216,14 +229,12 @@ async def on_message(m):
     if txt == "/pd":
         ping_only = False; return await m.channel.send("❌ Ping-only OFF.")
 
-    # Soft reset: resets ping/memory/LLM, but keeps chats
     if txt == "/ds":
         reset_defaults()
         current_llm = default_llm
         current_image_mode = "fast"
         return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, default LLM).")
 
-    # Secret hard reset: wipes everything (settings + chats + memory)
     if txt == "/re":
         reset_defaults()
         current_llm = default_llm
@@ -292,52 +303,33 @@ async def on_message(m):
             await asyncio.sleep(5)
             
             if current_image_mode == "fast":
-                # Pollinations.ai with proxy embedding
+                # Pollinations.ai - just send the URL
                 img_url = generate_image_url(prompt)
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(img_url) as resp:
-                        if resp.status == 200:
-                            image_data = await resp.read()
-                            file = guilded.File(fp=io.BytesIO(image_data), filename="image.png")
-                            embed = guilded.Embed(
-                                title=f"Image: {prompt}",
-                                description="Generated by Pollinations AI",
-                                color=0x3498db
-                            )
-                            embed.set_image(url="attachment://image.png")
-                            embed.add_field(name="Prompt", value=prompt, inline=False)
-                            embed.add_field(name="Mode", value="⚡ Fast (Pollinations)", inline=False)
-                            embed.add_field(name="Direct URL", value=f"[Open Image]({img_url})", inline=False)
-                            embed.set_footer(text="Powered by pollinations.ai")
-                            
-                            await msg.edit(content=f"✅ Generated with ⚡ FAST mode")
-                            return await m.channel.send(
-                                content=f"🖼️ Here's your image for **{prompt}**",
-                                file=file,
-                                embed=embed
-                            )
-                        else:
-                            await msg.edit(content="❌ Failed to download Pollinations image")
+                await msg.edit(
+                    content=f"🖼️ **{prompt}** (via Pollinations)\n" +
+                           f"⚡ Fast Mode | [Open Image]({img_url})\n" +
+                           f"{img_url}"
+                )
             
             else:  # Smart mode
-                # Hugging Face generation
+                # Hugging Face generation with hosting
                 image_data = await generate_hf_image(prompt)
-                file = guilded.File(fp=io.BytesIO(image_data), filename="image.png")
+                hosted_url = await upload_image_to_hosting(image_data)
+                
+                # Create embedded message
                 embed = guilded.Embed(
                     title=f"Image: {prompt}",
                     description="Generated by Hugging Face",
                     color=0x9b59b6
                 )
-                embed.set_image(url="attachment://image.png")
+                embed.set_image(url=hosted_url)
                 embed.add_field(name="Prompt", value=prompt, inline=False)
                 embed.add_field(name="Mode", value="🧠 Smart (Hugging Face)", inline=False)
                 embed.add_field(name="Model", value="Stable Diffusion XL", inline=False)
                 embed.set_footer(text="Powered by Hugging Face")
                 
-                await msg.edit(content=f"✅ Generated with 🧠 SMART mode")
-                return await m.channel.send(
+                await msg.edit(
                     content=f"🖼️ Here's your HQ image for **{prompt}**",
-                    file=file,
                     embed=embed
                 )
                 
@@ -368,7 +360,6 @@ async def on_message(m):
     if memory_enabled:
         saved_memory.append(("assistant", response))
 
-# Uptime endpoints
 async def handle_root(req): return web.Response(text="✅ Bot running!")
 async def handle_health(req): return web.Response(text="OK")
 

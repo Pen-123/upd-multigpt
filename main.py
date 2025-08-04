@@ -15,7 +15,7 @@ token = os.getenv("GUILDED_TOKEN")
 api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
 api_keys = [key for key in api_keys if key]  # Filter out None values
 hf_token = os.getenv("HF_TOKEN")  # Hugging Face token
-imgbb_api_key = os.getenv("HF_IMAGES")  # Image hosting API key
+imgbb_api_key = os.getenv("IMGBB_API_KEY")  # Image hosting API key
 if not api_keys:
     print("FATAL: No GROQ_API_KEY or GROQ_API_KEY2 environment variables set!")
     exit(1)
@@ -31,7 +31,7 @@ saved_chats = {}
 current_chat = None
 memory_enabled = False
 saved_memory = []
-current_image_mode = "fast"  # 'fast' or 'smart'
+current_image_mode = "smart"  # Default to highest quality now
 
 # Cooldown system
 user_cooldowns = {}
@@ -40,8 +40,8 @@ COOLDOWN_SECONDS = 5
 # Key rotation
 key_index = 0
 
-# Default LLM
-default_llm = "moonshotai/kimi-k2-instruct"
+# Default LLM - set to highest quality
+default_llm = "llama-3.3-70b-versatile"
 current_llm = default_llm
 
 allowed_llms = {
@@ -73,20 +73,28 @@ def reset_defaults():
     memory_enabled = False
     saved_memory.clear()
 
-def generate_image_url(prompt: str) -> str:
-    return "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+async def generate_pollinations_image(prompt: str) -> bytes:
+    """Generate image using Pollinations API and return bytes"""
+    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                return await response.read()
+            else:
+                raise Exception(f"Pollinations API error {response.status}")
 
 async def generate_hf_image(prompt: str) -> bytes:
-    """Generate image using Hugging Face's Stable Diffusion"""
+    """Generate image using Hugging Face's highest quality model"""
     API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {hf_token}"}
     
     payload = {
         "inputs": prompt,
         "parameters": {
-            "height": 768,
-            "width": 768,
-            "num_inference_steps": 25
+            "height": 1024,
+            "width": 1024,
+            "num_inference_steps": 50,
+            "guidance_scale": 9
         }
     }
     
@@ -99,7 +107,7 @@ async def generate_hf_image(prompt: str) -> bytes:
                 raise Exception(f"HF API error {response.status}: {error}")
 
 async def upload_image_to_hosting(image_data: bytes) -> str:
-    """Upload image to hosting service and return URL"""
+    """Upload image to ImgBB and return URL"""
     if not imgbb_api_key:
         raise Exception("Image hosting API key not configured")
     
@@ -168,7 +176,7 @@ async def ai_call(prompt):
 async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
     print(f"🔑 Using {len(api_keys)} API keys")
-    print(f"🎨 Image modes: Fast (Pollinations) & Smart (Hugging Face)")
+    print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     await bot.change_presence(
         activity=guilded.Activity(
             type=guilded.ActivityType.CUSTOM,
@@ -218,8 +226,8 @@ async def on_message(m):
             "`/sc1` - `/sc5` → Load saved chat slot 1-5.\n\n"
             "**Image Generation:**\n"
             "`/image [prompt]` → Generate an image\n"
-            "• Fast mode: Pollinations.ai URL\n"
-            "• Smart mode: Embedded HQ image\n"
+            "• Fast mode: Pollinations.ai (uploaded to ImgBB)\n"
+            "• Smart mode: Highest quality Hugging Face SDXL\n"
             "🖼️ 5 second generation time\n\n"
             "🔧 More features coming soon!"
         )
@@ -232,13 +240,13 @@ async def on_message(m):
     if txt == "/ds":
         reset_defaults()
         current_llm = default_llm
-        current_image_mode = "fast"
-        return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, default LLM).")
+        current_image_mode = "smart"  # Default to highest quality
+        return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, smart LLM).")
 
     if txt == "/re":
         reset_defaults()
         current_llm = default_llm
-        current_image_mode = "fast"
+        current_image_mode = "smart"  # Default to highest quality
         saved_chats.clear()
         return await m.channel.send("💣 Hard reset complete — everything wiped.")
 
@@ -258,7 +266,7 @@ async def on_message(m):
     if txt == "/smart":
         current_llm = allowed_llms["llama3-70b"]
         current_image_mode = "smart"
-        return await m.channel.send("🧠 Switched to SMART mode (llama3-70b + Hugging Face)")
+        return await m.channel.send("🧠 Switched to SMART mode (llama3-70b + Hugging Face SDXL)")
 
     m_sc = re.match(r"^/sc([1-5])$", txt)
     if m_sc:
@@ -295,7 +303,7 @@ async def on_message(m):
         prompt = parts[1].strip()
         
         # Send initial message
-        mode_display = "⚡ FAST (Pollinations)" if current_image_mode == "fast" else "🧠 SMART (Hugging Face)"
+        mode_display = "⚡ FAST (Pollinations)" if current_image_mode == "fast" else "🧠 SMART (Hugging Face SDXL)"
         msg = await m.channel.send(f"🖼️ Generating image with {mode_display} for: **{prompt}**...")
         
         try:
@@ -303,29 +311,41 @@ async def on_message(m):
             await asyncio.sleep(5)
             
             if current_image_mode == "fast":
-                # Pollinations.ai - just send the URL
-                img_url = generate_image_url(prompt)
+                # Generate with Pollinations and upload to ImgBB
+                image_data = await generate_pollinations_image(prompt)
+                hosted_url = await upload_image_to_hosting(image_data)
+                
+                embed = guilded.Embed(
+                    title=f"Image: {prompt}",
+                    description="Generated by Pollinations AI",
+                    color=0x3498db
+                )
+                embed.set_image(url=hosted_url)
+                embed.add_field(name="Prompt", value=prompt, inline=False)
+                embed.add_field(name="Mode", value="⚡ Fast (Pollinations)", inline=False)
+                embed.set_footer(text="Powered by Pollinations AI")
+                
                 await msg.edit(
-                    content=f"🖼️ **{prompt}** (via Pollinations)\n" +
-                           f"⚡ Fast Mode | [Open Image]({img_url})\n" +
-                           f"{img_url}"
+                    content=f"🖼️ Here's your image for **{prompt}**",
+                    embed=embed
                 )
             
             else:  # Smart mode
-                # Hugging Face generation with hosting
+                # Hugging Face generation with highest quality settings
                 image_data = await generate_hf_image(prompt)
                 hosted_url = await upload_image_to_hosting(image_data)
                 
                 # Create embedded message
                 embed = guilded.Embed(
-                    title=f"Image: {prompt}",
-                    description="Generated by Hugging Face",
+                    title=f"HQ Image: {prompt}",
+                    description="Generated by Stable Diffusion XL",
                     color=0x9b59b6
                 )
                 embed.set_image(url=hosted_url)
                 embed.add_field(name="Prompt", value=prompt, inline=False)
                 embed.add_field(name="Mode", value="🧠 Smart (Hugging Face)", inline=False)
                 embed.add_field(name="Model", value="Stable Diffusion XL", inline=False)
+                embed.add_field(name="Resolution", value="1024x1024", inline=False)
                 embed.set_footer(text="Powered by Hugging Face")
                 
                 await msg.edit(

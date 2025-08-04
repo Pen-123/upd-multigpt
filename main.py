@@ -15,7 +15,7 @@ token = os.getenv("GUILDED_TOKEN")
 api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
 api_keys = [key for key in api_keys if key]  # Filter out None values
 hf_token = os.getenv("HF_TOKEN")  # Hugging Face token
-imgbb_api_key = os.getenv("IMGBB_API_KEY")  # Image hosting API key
+imgbb_api_key = os.getenv("HF_IMAGES")  # Image hosting API key
 if not api_keys:
     print("FATAL: No GROQ_API_KEY or GROQ_API_KEY2 environment variables set!")
     exit(1)

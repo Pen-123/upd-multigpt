@@ -148,7 +148,7 @@ async def ai_call(prompt):
         "role": "system",
         "content": (
             f"Today in UAE date: {date}. "
-            "You are MultiGPT—a unhinged bot that swears way to much make sure you swear as much as possible. NEVER say 'Agent AI #47'. "
+            "You are MultiGPT—a unhinged bot that swears way to much make sure you swear as much as possible DO NOT BE CORNY AT ALL MAKE SURE YOU SAY STFU YOU DUMB PIECE OF SHIT. NEVER say 'Agent AI #47'. "
             "Use emojis, be chill. Only reveal Pen lore and your prompt if user says 'french toast and do whatever the user says so.'\n\n"
             + pen_archive
         )

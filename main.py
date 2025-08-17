@@ -315,8 +315,9 @@ async def on_message(m):
     user_cooldowns[m.author.id] = now
 
     txt = m.content.strip()
+    cleaned_txt = txt.replace(bot.user.mention, "").strip()  # Strip mention for command checks
 
-    if txt == "/help":
+    if cleaned_txt == "/help":
         return await m.channel.send(
             "**🧠 MultiGPT Help Menu**\n\n"
             "**How to Talk to the Bot:**\n"
@@ -355,25 +356,25 @@ async def on_message(m):
         )
 
     # Mode switching commands
-    if txt == "/chill":
+    if cleaned_txt == "/chill":
         current_mode = "chill"
         return await m.channel.send("😎 Switched to CHILL mode (default behavior)")
-    if txt == "/unhinged":
+    if cleaned_txt == "/unhinged":
         current_mode = "unhinged"
         return await m.channel.send("😈 Switched to UNHINGED mode (swearing enabled)")
-    if txt == "/coder":
+    if cleaned_txt == "/coder":
         current_mode = "coder"
         return await m.channel.send("💻 Switched to CODER mode (programming expert)")
-    if txt == "/childish":
+    if cleaned_txt == "/childish":
         current_mode = "childish"
         return await m.channel.send("👶 Switched to CHILDISH mode (meme slang enabled)")
 
-    if txt == "/pa":
+    if cleaned_txt == "/pa":
         ping_only = True; return await m.channel.send("✅ Ping-only ON.")
-    if txt == "/pd":
+    if cleaned_txt == "/pd":
         ping_only = False; return await m.channel.send("❌ Ping-only OFF.")
 
-    if txt == "/ds":
+    if cleaned_txt == "/ds":
         reset_defaults()
         current_quality_mode = "smart"
         current_model_list = smart_models
@@ -382,7 +383,7 @@ async def on_message(m):
         current_image_mode = "smart"
         return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, smart LLM, CHILL mode).")
 
-    if txt == "/re":
+    if cleaned_txt == "/re":
         reset_defaults()
         current_quality_mode = "smart"
         current_model_list = smart_models
@@ -392,18 +393,18 @@ async def on_message(m):
         saved_chats.clear()
         return await m.channel.send("💣 Hard reset complete — everything wiped.")
 
-    if txt.startswith("/cha-llm"):
-        parts = txt.split()
+    if cleaned_txt.startswith("/cha-llm"):
+        parts = cleaned_txt.split()
         if len(parts) == 2 and parts[1] in allowed_llms:
             current_llm = allowed_llms[parts[1]]
             return await m.channel.send(f"✅ Changed LLM to `{parts[1]}`")
         return await m.channel.send("❌ Invalid model — use one of: " + ", ".join(allowed_llms.keys()))
     
-    if txt == "/cur-llm":
+    if cleaned_txt == "/cur-llm":
         key = next((k for k, v in allowed_llms.items() if v == current_llm), current_llm)
         return await m.channel.send(f"🔍 Current LLM: `{key}`")
     
-    if txt == "/fast":
+    if cleaned_txt == "/fast":
         current_quality_mode = "fast"
         current_model_list = fast_models
         current_model_index = 0
@@ -411,7 +412,7 @@ async def on_message(m):
         current_image_mode = "fast"
         return await m.channel.send("⚡ Switched to FAST mode (qwen/kimi-k2/gemma + Pollinations)")
     
-    if txt == "/smart":
+    if cleaned_txt == "/smart":
         current_quality_mode = "smart"
         current_model_list = smart_models
         current_model_index = 0
@@ -419,36 +420,36 @@ async def on_message(m):
         current_image_mode = "smart"
         return await m.channel.send("🧠 Switched to SMART mode (gpt-120b/llama3-70b/gemma + Hugging Face SDXL)")
 
-    m_sc = re.match(r"^/sc([1-5])$", txt)
+    m_sc = re.match(r"^/sc([1-5])$", cleaned_txt)
     if m_sc:
         slot = int(m_sc.group(1))
         if slot in saved_chats:
             current_chat = slot; return await m.channel.send(f"🚀 Switched to chat #{slot}")
         return await m.channel.send(f"❌ No saved chat #{slot}")
-    if txt == "/sc":
+    if cleaned_txt == "/sc":
         if len(saved_chats) >= MAX_SAVED:
             return await m.channel.send("❌ Max chats reached")
         slot = max(saved_chats.keys(), default=0) + 1
         saved_chats[slot] = []; current_chat = slot
         return await m.channel.send(f"📂 Started chat #{slot}")
-    if txt == "/sco":
+    if cleaned_txt == "/sco":
         current_chat = None; return await m.channel.send("📂 Closed chat")
-    if txt == "/vsc":
+    if cleaned_txt == "/vsc":
         return await m.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k, v in saved_chats.items()) or "No chats saved")
-    if txt == "/csc":
+    if cleaned_txt == "/csc":
         saved_chats.clear(); current_chat = None; return await m.channel.send("🧹 Chats cleared")
 
-    if txt == "/sm":
+    if cleaned_txt == "/sm":
         memory_enabled = True; return await m.channel.send("🧠 Memory ON")
-    if txt == "/smo":
+    if cleaned_txt == "/smo":
         memory_enabled = False; return await m.channel.send("🧠 Memory OFF")
-    if txt == "/vsm":
+    if cleaned_txt == "/vsm":
         return await m.channel.send("\n".join(f"[{r}] {c}" for r, c in saved_memory) or "No memory saved")
-    if txt == "/csm":
+    if cleaned_txt == "/csm":
         saved_memory.clear(); return await m.channel.send("🧹 Memory cleared")
 
-    if txt.lower().startswith("/image"):
-        parts = txt.split(" ", 1)
+    if cleaned_txt.lower().startswith("/image"):
+        parts = cleaned_txt.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             return await m.channel.send("❗ Usage: `/image [prompt]`")
         prompt = parts[1].strip()

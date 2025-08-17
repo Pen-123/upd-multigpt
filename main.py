@@ -43,15 +43,11 @@ COOLDOWN_DURATION = 40  # 40-second cooldown for models
 
 # Define model tiers
 smart_models = [
-    "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "google/gemma-2-9b-it"
+    "llama-3.3-70b-versatile"
 ]
 
 fast_models = [
-    "qwen/qwen3-32b",
-    "moonshotai/kimi-k2-instruct",
-    "google/gemma-2-9b-it"
+    "moonshotai/kimi-k2-instruct"
 ]
 
 # Current model selection
@@ -86,12 +82,8 @@ mode_prompts = {
 # Allowed LLMs
 allowed_llms = {
     "llama3-70b": "llama-3.3-70b-versatile",
-    "llama3-8b": "llama-3.1-8b-instant",
     "kimi-k2": "moonshotai/kimi-k2-instruct",
-    "GPT": "openai/gpt-oss-20b",
-    "GPT-120b": "openai/gpt-oss-120b",
-    "qwen3-32b": "qwen/qwen3-32b",
-    "gemma2-9b": "google/gemma-2-9b-it"
+    "gemma2-9b": "google/gemma2-9b-it"
 }
 
 # Cooldown system
@@ -174,8 +166,8 @@ def get_next_available_model():
             current_model_index = next_index
             return model
     
-    # If all on cooldown, use Gemma as fallback
-    return "google/gemma-2-9b-it"
+    # If all on cooldown, use the only available model as fallback
+    return current_model_list[0]
 
 async def generate_pollinations_image(prompt: str) -> bytes:
     """Generate image using Pollinations API and return bytes"""
@@ -410,7 +402,7 @@ async def on_message(m):
         current_model_index = 0
         current_llm = fast_models[0]
         current_image_mode = "fast"
-        return await m.channel.send("⚡ Switched to FAST mode (qwen/kimi-k2/gemma + Pollinations)")
+        return await m.channel.send("⚡ Switched to FAST mode (kimi-k2 + Pollinations)")
     
     if cleaned_txt == "/smart":
         current_quality_mode = "smart"
@@ -418,7 +410,7 @@ async def on_message(m):
         current_model_index = 0
         current_llm = smart_models[0]
         current_image_mode = "smart"
-        return await m.channel.send("🧠 Switched to SMART mode (gpt-120b/llama3-70b/gemma + Hugging Face SDXL)")
+        return await m.channel.send("🧠 Switched to SMART mode (llama3-70b + Hugging Face SDXL)")
 
     m_sc = re.match(r"^/sc([1-5])$", cleaned_txt)
     if m_sc:

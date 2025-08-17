@@ -524,6 +524,8 @@ async def on_message(m):
 
     thinking = await m.channel.send("🤖 Thinking...")
     response = await ai_call(prompt) or "❌ No reply."
+    # Remove <think> ... </think> tags and their content
+    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
     await thinking.edit(content=response)
 
     if current_chat:

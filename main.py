@@ -143,6 +143,14 @@ RANDOM_ANNOYING_MESSAGES = [
     "meme klollolololo so funny aUHGUIGHI gyatt gyatt gyatt gyatt gyatt on my mindGHW[O"
 ]
 
+# Forbidden keywords for image safety
+FORBIDDEN_KEYWORDS = [
+    "naked", "nude", "nudes", "porn", "porno", "sex", "sexy", "nsfw", "hentai", "ecchi",
+    "breast", "boob", "boobs", "nipple", "nipples", "ass", "butt", "pussy", "cock", "dick",
+    "vagina", "penis", "fuck", "fucking", "cum", "orgasm", "masturbate", "strip", "undress",
+    "bikini", "lingerie", "thong", "topless", "bottomless", "explicit", "erotic", "adult"
+]
+
 def load_pen_archive_from_github():
     url = "https://raw.githubusercontent.com/Pen-123/new-pengpt/main/archives.txt"
     try:
@@ -222,13 +230,24 @@ def get_next_available_model():
     # If all on cooldown, use the only available model as fallback
     return current_model_list[0]
 
+def has_forbidden_keywords(prompt: str) -> bool:
+    """Simple keyword check for NSFW content"""
+    lower_prompt = prompt.lower()
+    return any(keyword in lower_prompt for keyword in FORBIDDEN_KEYWORDS)
+
 async def check_image_safety(prompt: str) -> str:
-    """Check if image prompt is safe using Groq's gpt-oss-20b"""
+    """Check if image prompt is safe using keywords and Groq's gpt-oss-20b"""
+    # First, check keywords
+    if has_forbidden_keywords(prompt):
+        print(f"🔍 Keyword filter triggered for prompt: {prompt}")
+        return "AI:STOPIMAGE"
+    
+    # Then, AI check
     checker_system = (
         "You are an image safety checker. Analyze the following image generation prompt. "
-        "If it contains any NSFW, violent, hateful, illegal, or otherwise inappropriate content, "
+        "If it contains any NSFW, explicit, sexual, nude, naked, violent, hateful, illegal, or otherwise inappropriate content, "
         "respond ONLY with 'AI:STOPIMAGE'. If it is completely safe and appropriate for all audiences, "
-        "respond ONLY with 'AI:ACCEPTIMAGE'. Do not add any other text"
+        "respond ONLY with 'AI:ACCEPTIMAGE'. Do not add any other text."
     )
     messages = [
         {"role": "system", "content": checker_system},

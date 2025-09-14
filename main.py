@@ -40,7 +40,7 @@ current_mode = "chill"  # Default mode: chill
 
 # HF State
 hf_key_index = 0
-current_hf_model = "HiDream-ai/HiDream-I1-Full"
+current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
 hf_disabled_until = {}  # channel_id -> expiration timestamp
 
 # Model management
@@ -269,8 +269,8 @@ async def generate_pollinations_image(prompt: str) -> bytes:
                 raise Exception(f"Pollinations API error {response.status}")
 
 async def generate_hf_image(prompt: str) -> bytes:
-    """Generate image using Hugging Face with token rotation and model fallback"""
-    global hf_key_index, current_hf_model
+    """Generate image using Hugging Face with token rotation"""
+    global hf_key_index
     retries = 0
     max_retries = 3
     
@@ -300,10 +300,6 @@ async def generate_hf_image(prompt: str) -> bytes:
                         # Rotate key
                         hf_key_index = (hf_key_index + 1) % len(hf_tokens)
                         retries += 1
-                        # If HiDream and retrying, switch to SDXL on second attempt
-                        if current_hf_model == "HiDream-ai/HiDream-I1-Full" and retries >= 2:
-                            current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
-                            print("🔄 Switched HF model to Stable Diffusion XL due to rate limit")
                         await asyncio.sleep(2 ** retries)  # Exponential backoff
                     else:
                         error_text = await response.text()
@@ -530,7 +526,7 @@ async def on_message(m):
         current_llm = smart_models[0]
         current_image_mode = "smart"
         hf_key_index = 0
-        current_hf_model = "HiDream-ai/HiDream-I1-Full"
+        current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
         return await m.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, smart LLM, CHILL mode).")
 
     if cleaned_txt == "/re":
@@ -541,7 +537,7 @@ async def on_message(m):
         current_llm = smart_models[0]
         current_image_mode = "smart"
         hf_key_index = 0
-        current_hf_model = "HiDream-ai/HiDream-I1-Full"
+        current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
         saved_chats.clear()
         hf_disabled_until.clear()
         return await m.channel.send("💣 Hard reset complete — everything wiped.")
@@ -572,8 +568,8 @@ async def on_message(m):
         current_llm = smart_models[0]
         current_image_mode = "smart"
         hf_key_index = 0
-        current_hf_model = "HiDream-ai/HiDream-I1-Full"
-        return await m.channel.send("🧠 Switched to SMART mode (llama3-70b + Hugging Face HiDream)")
+        current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
+        return await m.channel.send("🧠 Switched to SMART mode (llama3-70b + Hugging Face SDXL)")
 
     m_sc = re.match(r"^/sc([1-5])$", cleaned_txt)
     if m_sc:

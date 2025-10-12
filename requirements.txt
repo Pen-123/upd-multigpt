@@ -1,4 +1,4 @@
-guilded.py
+revolt.py
 aiohttp
 requests
 groq

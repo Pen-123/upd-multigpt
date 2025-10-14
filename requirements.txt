@@ -1,4 +1,5 @@
-revolt.py==0.2.0
-aiohttp==3.8.6
-requests==2.32.3
-groq==0.32.0
+aiohttp==3.9.3
+revolt.py==1.2.1
+requests==2.31.0
+python-dateutil==2.8.2
+pytz==2024.1

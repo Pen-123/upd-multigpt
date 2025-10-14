@@ -1,5 +1,5 @@
 aiohttp==3.9.3
-revolt.py==1.2.1
+revolt.py==0.2.0
 requests==2.31.0
 python-dateutil==2.8.2
 pytz==2024.1

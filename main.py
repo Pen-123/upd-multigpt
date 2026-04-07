@@ -160,7 +160,7 @@ FORBIDDEN_KEYWORDS = [
 # Helper functions (unchanged)
 # ------------------------------
 def load_pen_archive_from_github():
-    url = "https://raw.githubusercontent.com/Pen-123/upd-pengpt/main/archives.txt"
+    url = "https://raw.githubusercontent.com/Pen-123/upd-multigpt/refs/heads/main/archives.txt"
     try:
         response = requests.get(url)
         if response.status_code == 200:

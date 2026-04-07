@@ -686,7 +686,7 @@ async def on_message(message):
         memory_enabled = False
         await message.channel.send("🧠 Saved Memory **DISABLED**")
         return
-        elif cleaned_txt == "/vsm":
+    elif cleaned_txt == "/vsm":
         if saved_memory:
             memory_text = "\n".join([f"**{role}:** {content[:100]}..." if len(content) > 100 else f"**{role}:** {content}" for role, content in saved_memory[-10:]])
             await message.channel.send(f"🧠 **Saved Memory (last 10):**\n{memory_text}")

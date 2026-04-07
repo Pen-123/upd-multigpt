@@ -33,7 +33,8 @@ if not api_keys:
     exit(1)
 
 api_url = "https://api.groq.com/openai/v1/chat/completions"
-POLLINATIONS_VIDEO_URL = "https://enter.pollinations.ai/video"
+# Correct Pollinations video endpoint (from docs)
+POLLINATIONS_VIDEO_URL = "https://enter.pollinations.ai/api/video"
 
 MAX_SAVED = 5
 MAX_MEMORY = 50
@@ -73,7 +74,7 @@ current_model_list = smart_models
 current_model_index = 0
 current_llm = smart_models[0]
 
-# Video generation tracking (just status, no fake progress)
+# Video generation tracking
 video_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
 
 # Mode prompts (unchanged)
@@ -313,50 +314,39 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
-    """Generate video using Pollinations AI. Handles redirects and extracts video URL if needed."""
+    """Generate video using Pollinations AI (correct endpoint)."""
     global video_jobs
     encoded_prompt = urllib.parse.quote(prompt)
-    # Pollinations video endpoint: /video/{prompt}?duration=seconds
+    # Correct endpoint from docs: /api/video/{prompt}?duration={seconds}
     url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}"
     
-    # Use a session that follows redirects automatically
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MultiGPT-Bot/1.0)",
+        "Accept": "video/mp4,application/json,*/*"
+    }
     timeout = aiohttp.ClientTimeout(total=90)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, allow_redirects=True) as resp:
+            async with session.get(url, headers=headers, allow_redirects=True) as resp:
                 if resp.status == 200:
                     content_type = resp.headers.get('Content-Type', '')
                     if 'video' in content_type:
-                        # Direct video file
                         video_data = await resp.read()
-                        if len(video_data) < 10000:  # less than 10KB – likely error
-                            raise Exception(f"Received small file ({len(video_data)} bytes), possibly an error page")
+                        if len(video_data) < 10000:
+                            raise Exception(f"Received small file ({len(video_data)} bytes), not a valid video")
                         await status_message.edit(content=f"🎥 Video ready for: **{prompt}**")
                         await status_message.channel.send(
                             content=f"Here's your {seconds}s video for: **{prompt}**",
                             file=discord.File(io.BytesIO(video_data), filename="generated_video.mp4")
                         )
                     else:
-                        # Try to parse JSON response for a video URL
+                        # Try to parse JSON (some APIs return a job ID)
                         text = await resp.text()
                         try:
                             data = json.loads(text)
-                            # Look for common fields: video_url, url, output, result
-                            video_url = data.get('video_url') or data.get('url') or data.get('output') or data.get('result')
-                            if video_url:
-                                # Download from that URL
-                                async with session.get(video_url) as video_resp:
-                                    if video_resp.status == 200:
-                                        video_data = await video_resp.read()
-                                        await status_message.edit(content=f"🎥 Video ready for: **{prompt}**")
-                                        await status_message.channel.send(
-                                            content=f"Here's your {seconds}s video for: **{prompt}**",
-                                            file=discord.File(io.BytesIO(video_data), filename="generated_video.mp4")
-                                        )
-                                    else:
-                                        raise Exception(f"Failed to download video from URL: {video_resp.status}")
-                            else:
-                                raise Exception(f"Response did not contain video data or URL: {text[:200]}")
+                            # If the API returns a polling URL, we could implement it here
+                            # For now, assume it's an error
+                            raise Exception(f"API returned JSON instead of video: {text[:200]}")
                         except json.JSONDecodeError:
                             raise Exception(f"Unexpected response (not video nor JSON): {text[:200]}")
                 else:
@@ -367,7 +357,6 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
     except Exception as e:
         await status_message.edit(content=f"❌ Video generation failed: {str(e)}")
     finally:
-        # Clean up job entry
         video_jobs.pop(user_id, None)
 
 async def ai_call(prompt):
@@ -490,7 +479,7 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    print(f"🎬 Video generation: Pollinations AI")
+    print(f"🎬 Video generation: Pollinations AI (endpoint: {POLLINATIONS_VIDEO_URL})")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -591,13 +580,11 @@ async def on_message(message):
 
         # Start video generation
         status_msg = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**... This may take up to 90 seconds.")
-        # Store job info
         video_jobs[message.author.id] = {
             "status": "generating",
             "message": status_msg,
             "prompt": prompt
         }
-        # Run generation in background
         asyncio.create_task(generate_video(seconds, prompt, message.author.id, status_msg))
         return
 

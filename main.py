@@ -5,6 +5,8 @@ import urllib.parse
 import aiohttp
 import time
 import random
+import json
+import io
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import calendar
@@ -22,7 +24,7 @@ api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
 api_keys = [key for key in api_keys if key]
 
 # OpenRouter for video generation
-openrouter_api_key = os.getenv("OPENROUTER_API_KEY")   # new env var
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
 openrouter_enabled = bool(openrouter_api_key)
 
 hf_token = os.getenv("HF_TOKEN")
@@ -35,7 +37,7 @@ if not api_keys:
     exit(1)
 
 api_url = "https://api.groq.com/openai/v1/chat/completions"
-OPENROUTER_VIDEO_URL = "https://openrouter.ai/api/v1/chat/completions"  # may differ
+OPENROUTER_VIDEO_SUBMIT_URL = "https://openrouter.ai/api/alpha/videos"
 
 MAX_SAVED = 5
 MAX_MEMORY = 50
@@ -75,7 +77,7 @@ current_model_list = smart_models
 current_model_index = 0
 current_llm = smart_models[0]
 
-# Mode prompts
+# Mode prompts (unchanged)
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"
@@ -312,55 +314,64 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 async def generate_video(seconds: int, prompt: str) -> bytes:
-    """Generate video using OpenRouter with model alibaba/wan-2.6.
+    """Generate video using OpenRouter alibaba/wan-2.6.
        Returns video bytes (mp4) or raises exception."""
     if not openrouter_api_key:
         raise Exception("OpenRouter API key not configured. Set OPENROUTER_API_KEY.")
     if seconds < 1 or seconds > 10:
         raise Exception("Seconds must be between 1 and 10.")
     
-    # The exact endpoint for video generation may differ. Here we assume a chat completion
-    # that returns a video URL or file. Adjust as needed.
-    payload = {
+    # Append duration to prompt
+    full_prompt = f"{seconds} seconds video: {prompt}"
+    
+    # Step 1: Submit video generation request
+    submit_payload = {
         "model": "alibaba/wan-2.6",
-        "messages": [
-            {"role": "system", "content": "You are a video generation AI. Generate a video based on the user's prompt and duration."},
-            {"role": "user", "content": f"Duration: {seconds} seconds. Prompt: {prompt}"}
-        ],
-        "max_tokens": 500,
-        "temperature": 0.7
+        "prompt": full_prompt
     }
     headers = {
         "Authorization": f"Bearer {openrouter_api_key}",
         "Content-Type": "application/json"
     }
-    timeout = aiohttp.ClientTimeout(total=120)  # video may take longer
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Attempt to get video data. If the API returns a URL, we download it.
-        # Here we assume it returns a direct video file.
-        async with session.post(OPENROUTER_VIDEO_URL, json=payload, headers=headers) as resp:
-            if resp.status == 200:
-                # If the response is a video file
-                content_type = resp.headers.get('Content-Type', '')
-                if 'video' in content_type:
-                    return await resp.read()
-                else:
-                    # Try to parse JSON and extract a video URL
-                    data = await resp.json()
-                    # Look for a URL in common fields
-                    video_url = data.get('video_url') or data.get('url') or data.get('output')
-                    if video_url:
-                        # Download the video from that URL
-                        async with session.get(video_url) as video_resp:
-                            if video_resp.status == 200:
-                                return await video_resp.read()
-                            else:
-                                raise Exception(f"Failed to download video from {video_url}: {video_resp.status}")
-                    else:
-                        raise Exception("OpenRouter response did not contain video data or URL.")
-            else:
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(OPENROUTER_VIDEO_SUBMIT_URL, json=submit_payload, headers=headers) as resp:
+            if resp.status != 200:
                 error_text = await resp.text()
-                raise Exception(f"OpenRouter video generation error {resp.status}: {error_text}")
+                raise Exception(f"OpenRouter video submit error {resp.status}: {error_text}")
+            result = await resp.json()
+            job_id = result.get("id")
+            polling_url = result.get("polling_url")
+            if not job_id or not polling_url:
+                raise Exception("OpenRouter response missing id or polling_url")
+    
+    # Step 2: Poll for completion (max 2 minutes, check every 5 seconds)
+    max_polls = 24  # 24 * 5 = 120 seconds
+    for _ in range(max_polls):
+        await asyncio.sleep(5)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(polling_url, headers=headers) as poll_resp:
+                if poll_resp.status != 200:
+                    continue
+                status_data = await poll_resp.json()
+                status = status_data.get("status")
+                if status == "completed":
+                    video_urls = status_data.get("unsigned_urls", [])
+                    if not video_urls:
+                        raise Exception("Completed but no video URL found")
+                    video_url = video_urls[0]
+                    # Download the video
+                    async with session.get(video_url) as video_resp:
+                        if video_resp.status == 200:
+                            return await video_resp.read()
+                        else:
+                            raise Exception(f"Failed to download video: {video_resp.status}")
+                elif status == "failed":
+                    error_msg = status_data.get("error", "Unknown error")
+                    raise Exception(f"Video generation failed: {error_msg}")
+                # else still processing, continue polling
+    
+    raise Exception("Video generation timed out after 2 minutes")
 
 async def ai_call(prompt):
     messages = []
@@ -567,8 +578,12 @@ async def on_message(message):
             await message.channel.send("❌ Please provide a video prompt.")
             return
 
+        if not openrouter_enabled:
+            await message.channel.send("❌ OpenRouter video generation is not enabled. Please set OPENROUTER_API_KEY environment variable.")
+            return
+
         # Defer response while generating
-        thinking = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**... (this may take a while)")
+        thinking = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**...\nThis may take up to 2 minutes.")
         try:
             video_data = await generate_video(seconds, prompt)
             # Send the video as a file

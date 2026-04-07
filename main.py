@@ -318,9 +318,8 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
     global video_jobs
     encoded_prompt = urllib.parse.quote(prompt)
     
-    # FIX: Added required 'model' parameter. Options: "kontext", "seedream5", "seedream", "seedream-pro"
-    # Defaulting to "kontext" as it's the most versatile
-    video_model = "kontext"  
+    # Updated model to LTX-2.3 as requested
+    video_model = "LTX-2.3"
     
     url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}&model={video_model}"
    

@@ -34,7 +34,7 @@ if not api_keys:
 
 api_url = "https://api.groq.com/openai/v1/chat/completions"
 # Correct Pollinations video endpoint (from docs)
-POLLINATIONS_VIDEO_URL = "https://enter.pollinations.ai/api/video"
+POLLINATIONS_VIDEO_URL = "https://https://enter.pollinations.ai/video/{encoded_prompt}?duration={seconds}"
 
 MAX_SAVED = 5
 MAX_MEMORY = 50

@@ -36,6 +36,7 @@ api_url = "https://api.groq.com/openai/v1/chat/completions"
 
 # Official Pollinations unified endpoint (from docs)
 POLLINATIONS_VIDEO_URL = "https://gen.pollinations.ai/video"
+POLLINATIONS_AUDIO_URL = "https://gen.pollinations.ai/audio"
 
 MAX_SAVED = 5
 MAX_MEMORY = 50
@@ -76,6 +77,9 @@ current_llm = smart_models[0]
 
 # Video generation tracking
 video_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
+
+# Music generation tracking
+music_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
 
 # Mode prompts (unchanged)
 mode_prompts = {
@@ -320,7 +324,7 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
     
     # Use a valid video model from the allowed list
     # Options: "wan", "seedance", "seedance-pro", "veo", "kontext"
-    video_model = "wan"   # <-- Changed from "LTX-2.3" to a supported model
+    video_model = "wan"
     
     url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}&model={video_model}"
    
@@ -366,6 +370,48 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
         await status_message.edit(content=f"❌ Video generation failed: {str(e)}")
     finally:
         video_jobs.pop(user_id, None)
+
+async def generate_music(prompt: str, user_id: int, status_message: discord.Message):
+    """Generate music using Pollinations AI."""
+    global music_jobs
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"{POLLINATIONS_AUDIO_URL}/{encoded_prompt}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MultiGPT-Bot/1.0)",
+        "Accept": "audio/mpeg,application/json,*/*"
+    }
+    
+    if pollinations_api_key:
+        headers["Authorization"] = f"Bearer {pollinations_api_key}"
+
+    timeout = aiohttp.ClientTimeout(total=300)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers, allow_redirects=True) as resp:
+                if resp.status == 200:
+                    content_type = resp.headers.get('Content-Type', '')
+                    if 'audio' in content_type or 'mpeg' in content_type:
+                        audio_data = await resp.read()
+                        if len(audio_data) < 1000:
+                            raise Exception(f"Received small file ({len(audio_data)} bytes), not valid audio")
+                        await status_message.edit(content=f"🎵 Music ready for: **{prompt}**")
+                        await status_message.channel.send(
+                            content=f"Here's your music for: **{prompt}**",
+                            file=discord.File(io.BytesIO(audio_data), filename="generated_music.mp3")
+                        )
+                    else:
+                        text = await resp.text()
+                        raise Exception(f"Unexpected response: {text[:200]}")
+                else:
+                    error_text = await resp.text()
+                    raise Exception(f"Pollinations music error {resp.status}: {error_text[:500]}")
+    except asyncio.TimeoutError:
+        await status_message.edit(content=f"❌ Music generation timed out for: **{prompt}**")
+    except Exception as e:
+        await status_message.edit(content=f"❌ Music generation failed: {str(e)}")
+    finally:
+        music_jobs.pop(user_id, None)
 
 async def ai_call(prompt):
     messages = []
@@ -481,6 +527,7 @@ async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
     print(f"🔑 Using {len(api_keys)} GROQ API keys")
     print(f"🎬 Pollinations Video API key: {'✅ SET' if pollinations_api_key else '❌ NOT SET (will fail)'}")
+    print(f"🎵 Pollinations Music endpoint: {POLLINATIONS_AUDIO_URL}")
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
@@ -492,7 +539,7 @@ async def on_ready():
 async def on_message(message):
     global ping_only, current_chat, memory_enabled, current_llm, current_image_mode, current_mode
     global current_quality_mode, current_model_list, current_model_index
-    global hf_key_index, current_hf_model, video_jobs
+    global hf_key_index, current_hf_model, video_jobs, music_jobs
     
     if message.author == bot.user:
         return
@@ -519,6 +566,9 @@ async def on_message(message):
             "**Video Generation (Pollinations AI):**\n"
             "`/video <seconds> <prompt>` → Generate a video (max 10 seconds)\n"
             "`/vp` → Check status of your video  \n\n"
+            "**Music Generation (Pollinations AI):**\n"
+            "`/music <prompt>` → Generate music/audio from text\n"
+            "`/mp` → Check music generation status\n\n"
             "**Features:**\n"
             "`/ra` → Toggle random annoying messages (every 3 hours)\n"
             "`/fast` → Fast mode (kimi-k2 + Pollinations images)\n"
@@ -586,6 +636,38 @@ async def on_message(message):
             "prompt": prompt
         }
         asyncio.create_task(generate_video(seconds, prompt, message.author.id, status_msg))
+        return
+
+    # Music progress check
+    if cleaned_txt == "/mp":
+        user_id = message.author.id
+        job = music_jobs.get(user_id)
+        if job:
+            await message.channel.send(f"🎵 Music generation in progress for: **{job['prompt']}**... Please wait.")
+        else:
+            await message.channel.send("No active music generation. Use `/music` to start one.")
+        return
+
+    # Music generation command
+    if cleaned_txt.lower().startswith("/music"):
+        parts = cleaned_txt.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.channel.send("❗ Usage: `/music <prompt>`\nExample: `/music upbeat electronic dance track`")
+            return
+        prompt = parts[1].strip()
+        if not prompt:
+            await message.channel.send("❌ Please provide a music prompt.")
+            return
+        if message.author.id in music_jobs:
+            await message.channel.send("❌ You already have music generating. Use `/mp` to check progress.")
+            return
+        status_msg = await message.channel.send(f"🎵 Generating music for: **{prompt}**... This may take up to 5 minutes.")
+        music_jobs[message.author.id] = {
+            "status": "generating",
+            "message": status_msg,
+            "prompt": prompt
+        }
+        asyncio.create_task(generate_music(prompt, message.author.id, status_msg))
         return
 
     # Mode commands
@@ -798,7 +880,7 @@ async def on_message(message):
     response = await ai_call(prompt)
     
     # Clean up response (remove thinking tags if any)
-    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    response = re.sub(r'<think>.*?<think>', '', response, flags=re.DOTALL).strip()
     
     # Edit thinking message with response
     await thinking.edit(content=response[:2000] if len(response) <= 2000 else response[:1997] + "...")

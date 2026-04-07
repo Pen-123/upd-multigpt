@@ -19,7 +19,12 @@ import requests
 # ------------------------------
 token = os.getenv("DISCORD_TOKEN")
 api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
-api_keys = [key for key in api_keys if key]          # filter out None
+api_keys = [key for key in api_keys if key]
+
+# OpenRouter for video generation
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")   # new env var
+openrouter_enabled = bool(openrouter_api_key)
+
 hf_token = os.getenv("HF_TOKEN")
 hf_token2 = os.getenv("HF_TOKEN2")
 hf_tokens = [t for t in [hf_token, hf_token2] if t]
@@ -30,6 +35,8 @@ if not api_keys:
     exit(1)
 
 api_url = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_VIDEO_URL = "https://openrouter.ai/api/v1/chat/completions"  # may differ
+
 MAX_SAVED = 5
 MAX_MEMORY = 50
 TZ_UAE = ZoneInfo("Asia/Dubai")
@@ -53,7 +60,7 @@ current_mode = "chill"
 # HF state
 hf_key_index = 0
 current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
-hf_disabled_until = {}          # channel_id -> expiration timestamp
+hf_disabled_until = {}
 
 # Model management
 model_cooldowns = {}
@@ -61,15 +68,14 @@ key_index = 0
 last_key_rotation = 0
 COOLDOWN_DURATION = 40
 
-# Updated model lists: fast now uses openai/gpt-oss-20b
 smart_models = ["openai/gpt-oss-20b"]
 fast_models = ["moonshotai/kimi-k2-instruct-0905"]
 current_quality_mode = "smart"
 current_model_list = smart_models
 current_model_index = 0
-current_llm = smart_models[0]          # default = llama
+current_llm = smart_models[0]
 
-# Mode prompts (unchanged)
+# Mode prompts
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"
@@ -126,7 +132,6 @@ mode_prompts = {
     )
 }
 
-# Allowed LLMs (updated: kimi-k2 added, llama removed)
 allowed_llms = {
     "kimi-k2": "moonshotai/kimi-k2-instruct-0905",
     "gpt-oss": "openai/gpt-oss-20b",
@@ -148,7 +153,6 @@ RANDOM_ANNOYING_MESSAGES = [
     "meme klollolololo so funny aUHGUIGHI gyatt gyatt gyatt gyatt gyatt on my mindGHW[O"
 ]
 
-# Forbidden keywords for image safety
 FORBIDDEN_KEYWORDS = [
     "naked", "nude", "nudes", "porn", "porno", "sex", "sexy", "nsfw", "hentai", "ecchi",
     "breast", "boob", "boobs", "nipple", "nipples", "ass", "butt", "pussy", "cock", "dick",
@@ -157,7 +161,7 @@ FORBIDDEN_KEYWORDS = [
 ]
 
 # ------------------------------
-# Helper functions (unchanged)
+# Helper functions
 # ------------------------------
 def load_pen_archive_from_github():
     url = "https://raw.githubusercontent.com/Pen-123/upd-multigpt/refs/heads/main/archives.txt"
@@ -237,7 +241,7 @@ async def check_image_safety(prompt: str) -> str:
         {"role": "system", "content": checker_system},
         {"role": "user", "content": prompt}
     ]
-    model = "openai/gpt-oss-20b"   # uses the same model for safety check (fast)
+    model = "openai/gpt-oss-20b"
     payload = {"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 50}
     current_key = api_keys[key_index]
     headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
@@ -306,6 +310,57 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 return data['data']['url']
             else:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
+
+async def generate_video(seconds: int, prompt: str) -> bytes:
+    """Generate video using OpenRouter with model alibaba/wan-2.6.
+       Returns video bytes (mp4) or raises exception."""
+    if not openrouter_api_key:
+        raise Exception("OpenRouter API key not configured. Set OPENROUTER_API_KEY.")
+    if seconds < 1 or seconds > 10:
+        raise Exception("Seconds must be between 1 and 10.")
+    
+    # The exact endpoint for video generation may differ. Here we assume a chat completion
+    # that returns a video URL or file. Adjust as needed.
+    payload = {
+        "model": "alibaba/wan-2.6",
+        "messages": [
+            {"role": "system", "content": "You are a video generation AI. Generate a video based on the user's prompt and duration."},
+            {"role": "user", "content": f"Duration: {seconds} seconds. Prompt: {prompt}"}
+        ],
+        "max_tokens": 500,
+        "temperature": 0.7
+    }
+    headers = {
+        "Authorization": f"Bearer {openrouter_api_key}",
+        "Content-Type": "application/json"
+    }
+    timeout = aiohttp.ClientTimeout(total=120)  # video may take longer
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        # Attempt to get video data. If the API returns a URL, we download it.
+        # Here we assume it returns a direct video file.
+        async with session.post(OPENROUTER_VIDEO_URL, json=payload, headers=headers) as resp:
+            if resp.status == 200:
+                # If the response is a video file
+                content_type = resp.headers.get('Content-Type', '')
+                if 'video' in content_type:
+                    return await resp.read()
+                else:
+                    # Try to parse JSON and extract a video URL
+                    data = await resp.json()
+                    # Look for a URL in common fields
+                    video_url = data.get('video_url') or data.get('url') or data.get('output')
+                    if video_url:
+                        # Download the video from that URL
+                        async with session.get(video_url) as video_resp:
+                            if video_resp.status == 200:
+                                return await video_resp.read()
+                            else:
+                                raise Exception(f"Failed to download video from {video_url}: {video_resp.status}")
+                    else:
+                        raise Exception("OpenRouter response did not contain video data or URL.")
+            else:
+                error_text = await resp.text()
+                raise Exception(f"OpenRouter video generation error {resp.status}: {error_text}")
 
 async def ai_call(prompt):
     messages = []
@@ -427,6 +482,7 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
+    print(f"🎬 OpenRouter video generation: {'Enabled' if openrouter_enabled else 'Disabled'}")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -453,44 +509,76 @@ async def on_message(message):
         help_text = (
             "**🧠 MultiGPT Help Menu**\n\n"
             "**How to Talk to the Bot:**\n"
-            "`@MultiGPT V3 <your message>` → Ask the bot anything!\n\n"
+            "`@MultiGPT <your message>` → Ask the bot anything!\n\n"
             "**Modes:**\n"
-            "`/chill` → Default casual mode (emoji-filled, laid-back)\n"
+            "`/chill` → Default casual mode\n"
             "`/unhinged` → Unfiltered mode (swears constantly)\n"
-            "`/coder` → Programming expert mode (technical answers)\n"
-            "`/childish` → Childish mode (uses meme slang constantly)\n\n"
-            "**New Features:**\n"
-            "`/ra` → Toggle random annoying messages every 3 hours\n\n"
+            "`/coder` → Programming expert mode\n"
+            "`/childish` → Childish mode (meme slang)\n\n"
+            "**Video Generation (NEW):**\n"
+            "`/video <seconds> <prompt>` → Generate a video (max 10 seconds)\n"
+            "• Uses OpenRouter with model `alibaba/wan-2.6`\n"
+            "• Requires `OPENROUTER_API_KEY` environment variable\n\n"
+            "**Features:**\n"
+            "`/ra` → Toggle random annoying messages (every 3 hours)\n"
+            "`/fast` → Fast mode (kimi-k2 + Pollinations images)\n"
+            "`/smart` → Smart mode (gpt-oss + Hugging Face images)\n"
+            "`/pa` → Ping-only mode ON\n"
+            "`/pd` → Ping-only mode OFF\n"
+            "`/ds` → Soft reset\n"
+            "`/re` → Hard reset (clears everything)\n\n"
             "**General Commands:**\n"
-            "`/help` → Show this help menu.\n"
-            "`/cur-llm` → Show the current AI model in use.\n"
-            "`/cha-llm <name>` → Manually change AI model (llama3-70b, gpt-oss, gemma2-9b).\n"
-            "`/fast` → Use fast models + Pollinations image gen\n"
-            "`/smart` → Use smart models + Hugging Face image gen\n"
-            "`/pa` → Activates Ping Mode.\n"
-            "`/pd` → Deactivates Ping Mode.\n"
-            "`/ds` → Soft reset (ping-only ON, memory OFF, default LLM).\n\n"
+            "`/help` → Show this menu\n"
+            "`/cur-llm` → Show current LLM\n"
+            "`/cha-llm <name>` → Change LLM (kimi-k2, gpt-oss, gemma2-9b)\n"
+            "`/countdown` → Time until Dec 19\n\n"
             "**Saved Memory (SM):**\n"
-            "`/sm` → Enable memory.\n"
-            "`/smo` → Turn off memory.\n"
-            "`/vsm` → View memory.\n"
-            "`/csm` → Clear memory.\n\n"
+            "`/sm` → Enable | `/smo` → Disable\n"
+            "`/vsm` → View | `/csm` → Clear\n\n"
             "**Saved Chats (SC):**\n"
-            "`/sc` → Start a saved chat slot.\n"
-            "`/sco` → Close current saved chat.\n"
-            "`/vsc` → View all saved chats.\n"
-            "`/csc` → Clear all saved chats.\n"
-            "`/sc1` - `/sc5` → Load saved chat slot 1-5.\n\n"
+            "`/sc` → Start | `/sco` → Close\n"
+            "`/vsc` → View | `/csc` → Clear\n"
+            "`/sc1`-`/sc5` → Load slots\n\n"
             "**Image Generation:**\n"
-            "`/image [prompt]` → Generate an image\n"
-            "• Fast mode: Pollinations.ai (uploaded to ImgBB)\n"
-            "• Smart mode: Highest quality Hugging Face (with safety checks)\n"
-            "🖼️ 5 second generation time\n\n"
-            "**Countdown:**\n"
-            "`/countdown` → Show time remaining until Dec 19 (months, weeks, days, hours, minutes, seconds)\n\n"
+            "`/image [prompt]` → Generate an image (5 sec wait)\n"
+            "• Fast: Pollinations.ai + ImgBB\n"
+            "• Smart: Hugging Face SDXL (safety checks)\n\n"
             "🔧 More features coming soon!"
         )
         await message.channel.send(help_text)
+        return
+
+    # ----- Video generation command -----
+    if cleaned_txt.lower().startswith("/video"):
+        parts = cleaned_txt.split(maxsplit=2)
+        if len(parts) < 3:
+            await message.channel.send("❗ Usage: `/video <seconds> <prompt>`\nExample: `/video 5 a cat playing guitar`")
+            return
+        try:
+            seconds = int(parts[1])
+            if seconds < 1 or seconds > 10:
+                await message.channel.send("❌ Seconds must be between 1 and 10.")
+                return
+        except ValueError:
+            await message.channel.send("❌ Seconds must be a number (1-10).")
+            return
+        prompt = parts[2].strip()
+        if not prompt:
+            await message.channel.send("❌ Please provide a video prompt.")
+            return
+
+        # Defer response while generating
+        thinking = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**... (this may take a while)")
+        try:
+            video_data = await generate_video(seconds, prompt)
+            # Send the video as a file
+            await message.channel.send(
+                content=f"🎥 Here's your {seconds}s video for: **{prompt}**",
+                file=discord.File(io.BytesIO(video_data), filename="generated_video.mp4")
+            )
+            await thinking.delete()
+        except Exception as e:
+            await thinking.edit(content=f"❌ Video generation failed: {str(e)}")
         return
 
     if cleaned_txt == "/countdown":
@@ -502,38 +590,38 @@ async def on_message(message):
     # Mode switching
     if cleaned_txt == "/chill":
         current_mode = "chill"
-        await message.channel.send("😎 Switched to CHILL mode (default behavior)")
+        await message.channel.send("😎 Switched to CHILL mode")
         return
     if cleaned_txt == "/unhinged":
         current_mode = "unhinged"
-        await message.channel.send("😈 Switched to UNHINGED mode (swearing enabled)")
+        await message.channel.send("😈 Switched to UNHINGED mode")
         return
     if cleaned_txt == "/coder":
         current_mode = "coder"
-        await message.channel.send("💻 Switched to CODER mode (programming expert)")
+        await message.channel.send("💻 Switched to CODER mode")
         return
     if cleaned_txt == "/childish":
         current_mode = "childish"
-        await message.channel.send("👶 Switched to CHILDISH mode (meme slang enabled)")
+        await message.channel.send("👶 Switched to CHILDISH mode")
         return
 
     # Random annoying toggle
     if cleaned_txt == "/ra":
         if message.channel.id in annoying_channels:
             annoying_channels.discard(message.channel.id)
-            await message.channel.send("🔇 Random annoying messages turned OFF")
+            await message.channel.send("🔇 Random annoying messages OFF")
         else:
             annoying_channels.add(message.channel.id)
-            await message.channel.send("🔊 Random annoying messages turned ON! Sending every 3 hours")
+            await message.channel.send("🔊 Random annoying messages ON (every 3h)")
         return
 
     if cleaned_txt == "/pa":
         ping_only = True
-        await message.channel.send("✅ Ping-only ON.")
+        await message.channel.send("✅ Ping-only ON")
         return
     if cleaned_txt == "/pd":
         ping_only = False
-        await message.channel.send("❌ Ping-only OFF.")
+        await message.channel.send("❌ Ping-only OFF")
         return
 
     if cleaned_txt == "/ds":
@@ -582,7 +670,7 @@ async def on_message(message):
         current_model_index = 0
         current_llm = fast_models[0]
         current_image_mode = "fast"
-        await message.channel.send("⚡ Switched to FAST mode (gpt-oss-20b + Pollinations)")
+        await message.channel.send("⚡ Switched to FAST mode (kimi-k2 + Pollinations)")
         return
 
     if cleaned_txt == "/smart":
@@ -593,7 +681,7 @@ async def on_message(message):
         current_image_mode = "smart"
         hf_key_index = 0
         current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
-        await message.channel.send("🧠 Switched to SMART mode (llama3-70b + Hugging Face SDXL)")
+        await message.channel.send("🧠 Switched to SMART mode (gpt-oss + Hugging Face SDXL)")
         return
 
     # Saved chats

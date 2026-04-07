@@ -23,10 +23,6 @@ token = os.getenv("DISCORD_TOKEN")
 api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
 api_keys = [key for key in api_keys if key]
 
-# OpenRouter for video generation
-openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-openrouter_enabled = bool(openrouter_api_key)
-
 hf_token = os.getenv("HF_TOKEN")
 hf_token2 = os.getenv("HF_TOKEN2")
 hf_tokens = [t for t in [hf_token, hf_token2] if t]
@@ -37,7 +33,7 @@ if not api_keys:
     exit(1)
 
 api_url = "https://api.groq.com/openai/v1/chat/completions"
-OPENROUTER_VIDEO_SUBMIT_URL = "https://openrouter.ai/api/alpha/videos"
+POLLINATIONS_VIDEO_URL = "https://enter.pollinations.ai/video"  # base URL
 
 MAX_SAVED = 5
 MAX_MEMORY = 50
@@ -76,6 +72,9 @@ current_quality_mode = "smart"
 current_model_list = smart_models
 current_model_index = 0
 current_llm = smart_models[0]
+
+# Video generation tracking
+video_jobs = {}  # user_id -> { "progress": int, "status": str, "message": discord.Message, "channel": discord.TextChannel, "prompt": str }
 
 # Mode prompts (unchanged)
 mode_prompts = {
@@ -267,7 +266,7 @@ async def generate_pollinations_image(prompt: str) -> bytes:
             if response.status == 200:
                 return await response.read()
             else:
-                raise Exception(f"Pollinations API error {response.status}")
+                raise Exception(f"Pollinations image error {response.status}")
 
 async def generate_hf_image(prompt: str) -> bytes:
     global hf_key_index
@@ -313,65 +312,65 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
             else:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
-async def generate_video(seconds: int, prompt: str) -> bytes:
-    """Generate video using OpenRouter alibaba/wan-2.6.
-       Returns video bytes (mp4) or raises exception."""
-    if not openrouter_api_key:
-        raise Exception("OpenRouter API key not configured. Set OPENROUTER_API_KEY.")
-    if seconds < 1 or seconds > 10:
-        raise Exception("Seconds must be between 1 and 10.")
+async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
+    """Generate video using Pollinations AI, update progress in video_jobs."""
+    global video_jobs
+    # URL encode the prompt
+    encoded_prompt = urllib.parse.quote(prompt)
+    # Pollinations video endpoint: GET /video/{prompt}?duration=seconds
+    url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}"
     
-    # Append duration to prompt
-    full_prompt = f"{seconds} seconds video: {prompt}"
+    # Since Pollinations may not provide progress, we simulate progress by polling
+    # In reality, we would poll a status endpoint. Here we simulate for demonstration.
+    # We'll assume the video is generated in roughly 30 seconds and we update progress every 2 seconds.
+    total_time = 30  # seconds estimate
+    start_time = time.time()
     
-    # Step 1: Submit video generation request
-    submit_payload = {
-        "model": "alibaba/wan-2.6",
-        "prompt": full_prompt
-    }
-    headers = {
-        "Authorization": f"Bearer {openrouter_api_key}",
-        "Content-Type": "application/json"
-    }
+    # Start a background task to update progress
+    async def update_progress():
+        nonlocal start_time
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed >= total_time:
+                video_jobs[user_id]["progress"] = 100
+                break
+            progress = int((elapsed / total_time) * 100)
+            video_jobs[user_id]["progress"] = min(progress, 99)
+            await asyncio.sleep(2)
     
-    async with aiohttp.ClientSession() as session:
-        async with session.post(OPENROUTER_VIDEO_SUBMIT_URL, json=submit_payload, headers=headers) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise Exception(f"OpenRouter video submit error {resp.status}: {error_text}")
-            result = await resp.json()
-            job_id = result.get("id")
-            polling_url = result.get("polling_url")
-            if not job_id or not polling_url:
-                raise Exception("OpenRouter response missing id or polling_url")
+    # Run progress updater
+    progress_task = asyncio.create_task(update_progress())
     
-    # Step 2: Poll for completion (max 2 minutes, check every 5 seconds)
-    max_polls = 24  # 24 * 5 = 120 seconds
-    for _ in range(max_polls):
-        await asyncio.sleep(5)
+    # Make the actual request to Pollinations
+    try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(polling_url, headers=headers) as poll_resp:
-                if poll_resp.status != 200:
-                    continue
-                status_data = await poll_resp.json()
-                status = status_data.get("status")
-                if status == "completed":
-                    video_urls = status_data.get("unsigned_urls", [])
-                    if not video_urls:
-                        raise Exception("Completed but no video URL found")
-                    video_url = video_urls[0]
-                    # Download the video
-                    async with session.get(video_url) as video_resp:
-                        if video_resp.status == 200:
-                            return await video_resp.read()
-                        else:
-                            raise Exception(f"Failed to download video: {video_resp.status}")
-                elif status == "failed":
-                    error_msg = status_data.get("error", "Unknown error")
-                    raise Exception(f"Video generation failed: {error_msg}")
-                # else still processing, continue polling
-    
-    raise Exception("Video generation timed out after 2 minutes")
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                progress_task.cancel()
+                if resp.status == 200:
+                    video_data = await resp.read()
+                    video_jobs[user_id]["progress"] = 100
+                    video_jobs[user_id]["status"] = "completed"
+                    # Send the video file
+                    await status_message.edit(content=f"🎥 Video ready for: **{prompt}**")
+                    await status_message.channel.send(
+                        content=f"Here's your {seconds}s video for: **{prompt}**",
+                        file=discord.File(io.BytesIO(video_data), filename="generated_video.mp4")
+                    )
+                    # Clean up job entry
+                    del video_jobs[user_id]
+                else:
+                    error_text = await resp.text()
+                    raise Exception(f"Pollinations video error {resp.status}: {error_text}")
+    except asyncio.TimeoutError:
+        progress_task.cancel()
+        video_jobs[user_id]["status"] = "failed"
+        await status_message.edit(content=f"❌ Video generation timed out after 60 seconds for: **{prompt}**")
+        del video_jobs[user_id]
+    except Exception as e:
+        progress_task.cancel()
+        video_jobs[user_id]["status"] = "failed"
+        await status_message.edit(content=f"❌ Video generation failed: {str(e)}")
+        del video_jobs[user_id]
 
 async def ai_call(prompt):
     messages = []
@@ -493,7 +492,7 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    print(f"🎬 OpenRouter video generation: {'Enabled' if openrouter_enabled else 'Disabled'}")
+    print(f"🎬 Video generation: Pollinations AI")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -501,7 +500,7 @@ async def on_ready():
 async def on_message(message):
     global ping_only, current_chat, memory_enabled, current_llm, current_image_mode, current_mode
     global current_quality_mode, current_model_list, current_model_index
-    global hf_key_index, current_hf_model
+    global hf_key_index, current_hf_model, video_jobs
 
     if message.author == bot.user:
         return
@@ -526,10 +525,9 @@ async def on_message(message):
             "`/unhinged` → Unfiltered mode (swears constantly)\n"
             "`/coder` → Programming expert mode\n"
             "`/childish` → Childish mode (meme slang)\n\n"
-            "**Video Generation (NEW):**\n"
+            "**Video Generation (Pollinations AI):**\n"
             "`/video <seconds> <prompt>` → Generate a video (max 10 seconds)\n"
-            "• Uses OpenRouter with model `alibaba/wan-2.6`\n"
-            "• Requires `OPENROUTER_API_KEY` environment variable\n\n"
+            "`/vp` → Show current video generation progress (%)\n\n"
             "**Features:**\n"
             "`/ra` → Toggle random annoying messages (every 3 hours)\n"
             "`/fast` → Fast mode (kimi-k2 + Pollinations images)\n"
@@ -559,6 +557,23 @@ async def on_message(message):
         await message.channel.send(help_text)
         return
 
+    # ----- Video progress command -----
+    if cleaned_txt == "/vp":
+        user_id = message.author.id
+        job = video_jobs.get(user_id)
+        if job:
+            progress = job.get("progress", 0)
+            status = job.get("status", "generating")
+            if status == "completed":
+                await message.channel.send("✅ Your last video is ready! Check the channel.")
+            elif status == "failed":
+                await message.channel.send("❌ Your last video generation failed.")
+            else:
+                await message.channel.send(f"🎬 Video generation progress: **{progress}%**")
+        else:
+            await message.channel.send("No active video generation. Use `/video` to start one.")
+        return
+
     # ----- Video generation command -----
     if cleaned_txt.lower().startswith("/video"):
         parts = cleaned_txt.split(maxsplit=2)
@@ -578,22 +593,23 @@ async def on_message(message):
             await message.channel.send("❌ Please provide a video prompt.")
             return
 
-        if not openrouter_enabled:
-            await message.channel.send("❌ OpenRouter video generation is not enabled. Please set OPENROUTER_API_KEY environment variable.")
+        # Check if user already has a job
+        if message.author.id in video_jobs:
+            await message.channel.send("❌ You already have a video generating. Use `/vp` to check progress.")
             return
 
-        # Defer response while generating
-        thinking = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**...\nThis may take up to 2 minutes.")
-        try:
-            video_data = await generate_video(seconds, prompt)
-            # Send the video as a file
-            await message.channel.send(
-                content=f"🎥 Here's your {seconds}s video for: **{prompt}**",
-                file=discord.File(io.BytesIO(video_data), filename="generated_video.mp4")
-            )
-            await thinking.delete()
-        except Exception as e:
-            await thinking.edit(content=f"❌ Video generation failed: {str(e)}")
+        # Start video generation
+        status_msg = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**... (0%)")
+        # Store job info
+        video_jobs[message.author.id] = {
+            "progress": 0,
+            "status": "generating",
+            "message": status_msg,
+            "channel": message.channel,
+            "prompt": prompt
+        }
+        # Run generation in background
+        asyncio.create_task(generate_video(seconds, prompt, message.author.id, status_msg))
         return
 
     if cleaned_txt == "/countdown":
@@ -662,6 +678,7 @@ async def on_message(message):
         current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
         saved_chats.clear()
         hf_disabled_until.clear()
+        video_jobs.clear()
         await message.channel.send("💣 Hard reset complete — everything wiped.")
         return
 

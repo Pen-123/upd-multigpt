@@ -19,12 +19,11 @@ import requests
 # ------------------------------
 token = os.getenv("DISCORD_TOKEN")
 groq_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY2")]
-groq_keys = [key for key in groq_keys if key]  # Filter out None values
+groq_keys = [key for key in groq_keys if key]
 
-# OpenRouter configuration
 openrouter_key = os.getenv("OPENROUTER_API_KEY")
 openrouter_enabled = bool(openrouter_key)
-openrouter_default_model = "cohere/rerank-4-fast"  # Default for MultiGPT
+openrouter_default_model = "cohere/rerank-4-fast"
 openrouter_free_model = "qwen/qwen3.6-plus:free"
 
 hf_token = os.getenv("HF_TOKEN")
@@ -32,12 +31,10 @@ hf_token2 = os.getenv("HF_TOKEN2")
 hf_tokens = [t for t in [hf_token, hf_token2] if t]
 imgbb_api_key = os.getenv("HF_IMAGES")
 
-# Check for at least one API provider
 if not groq_keys and not openrouter_key:
-    print("FATAL: No GROQ_API_KEY(s) or OPENROUTER_API_KEY environment variables set!")
+    print("FATAL: No GROQ_API_KEY(s) or OPENROUTER_API_KEY set!")
     exit(1)
 
-# API URLs
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -52,7 +49,7 @@ intents = Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-# State variables
+# State
 ping_only = True
 saved_chats = {}
 current_chat = None
@@ -63,34 +60,44 @@ current_mode = "chill"
 
 # API Provider Management
 current_provider = "groq"  # "groq" or "openrouter"
-current_llm = "llama-3.3-70b-versatile"  # Default Groq model
+current_llm = "llama-3.3-70b-versatile"   # default smart model
 groq_key_index = 0
-openrouter_model = openrouter_default_model  # Default OpenRouter model
+openrouter_model = openrouter_default_model
 
 # HF state
 hf_key_index = 0
 current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
 hf_disabled_until = {}
 
-# Model management (for Groq)
+# Groq model management
 model_cooldowns = {}
 last_key_rotation = 0
 COOLDOWN_DURATION = 40
 
-# Groq models
+# Groq model lists – kimi-k2 is back as fast default
 smart_models = ["llama-3.3-70b-versatile"]
-fast_models = ["openai/gpt-oss-20b"]
+fast_models = ["moonshotai/kimi-k2-instruct"]   # <-- kimi-k2 restored
 current_quality_mode = "smart"
 current_model_list = smart_models
 current_model_index = 0
 
-# OpenRouter models
+# OpenRouter available models
 openrouter_models = {
     "cohere": "cohere/rerank-4-fast",
     "qwen-free": "qwen/qwen3.6-plus:free",
     "qwen-plus": "qwen/qwen-plus:free",
     "deepseek": "deepseek/deepseek-chat:free",
     "mistral": "mistralai/mistral-7b-instruct:free"
+}
+
+# Allowed LLMs with provider info
+allowed_llms = {
+    "groq": {
+        "llama3-70b": "llama-3.3-70b-versatile",
+        "kimi-k2": "moonshotai/kimi-k2-instruct",
+        "gemma2-9b": "google/gemma2-9b-it"
+    },
+    "openrouter": openrouter_models
 }
 
 # Mode prompts (unchanged)
@@ -150,21 +157,11 @@ mode_prompts = {
     )
 }
 
-# Allowed LLMs with provider info
-allowed_llms = {
-    "groq": {
-        "llama3-70b": "llama-3.3-70b-versatile",
-        "gpt-oss": "openai/gpt-oss-20b",
-        "gemma2-9b": "google/gemma2-9b-it"
-    },
-    "openrouter": openrouter_models
-}
-
-# Cooldown system
+# Cooldown
 user_cooldowns = {}
 USER_COOLDOWN_SECONDS = 5
 
-# Random annoying messages
+# Annoying messages
 annoying_channels = set()
 RANDOM_ANNOYING_MESSAGES = [
     "OH MY GOD HARDER OHH UGHHHH skibidi toilet gyatt on my mind diddy daddy diddy daddy diddy daddy",
@@ -175,7 +172,7 @@ RANDOM_ANNOYING_MESSAGES = [
     "meme klollolololo so funny aUHGUIGHI gyatt gyatt gyatt gyatt gyatt on my mindGHW[O"
 ]
 
-# Forbidden keywords for image safety
+# Forbidden keywords for images
 FORBIDDEN_KEYWORDS = [
     "naked", "nude", "nudes", "porn", "porno", "sex", "sexy", "nsfw", "hentai", "ecchi",
     "breast", "boob", "boobs", "nipple", "nipples", "ass", "butt", "pussy", "cock", "dick",
@@ -205,7 +202,7 @@ pen_archive = load_pen_archive_from_github()
 def reset_defaults():
     global ping_only, current_chat, memory_enabled, saved_memory, current_mode
     global current_provider, current_llm, current_quality_mode, current_model_list, current_model_index
-    global groq_key_index, current_hf_model
+    global groq_key_index, current_hf_model, openrouter_model
     
     ping_only = True
     current_chat = None
@@ -219,9 +216,9 @@ def reset_defaults():
     current_model_index = 0
     groq_key_index = 0
     current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
+    openrouter_model = openrouter_default_model
 
 def rotate_groq_key():
-    """Rotate through available Groq API keys"""
     global groq_key_index
     if not groq_keys:
         return None
@@ -230,57 +227,49 @@ def rotate_groq_key():
     return key
 
 def switch_to_openrouter():
-    """Switch to OpenRouter provider"""
-    global current_provider, openrouter_enabled
+    global current_provider
     if openrouter_enabled:
         current_provider = "openrouter"
         return True
     return False
 
 def handle_groq_rate_limit():
-    """Handle Groq rate limit by rotating keys or falling back to OpenRouter"""
     global current_provider, groq_key_index
-    
     print(f"⚠️ Rate limit encountered for Groq")
-    
-    # Try rotating Groq keys first
     if len(groq_keys) > 1:
         rotate_groq_key()
         print(f"🔄 Rotated Groq key to index {groq_key_index}")
         return "groq"
-    
-    # If only one key or rotation doesn't help, fall back to OpenRouter
     if openrouter_enabled and current_provider != "openrouter":
         current_provider = "openrouter"
         print(f"🔄 Falling back to OpenRouter provider")
         return "openrouter"
-    
-    return "groq"  # Stay on Groq if no fallback
+    return "groq"
 
-def get_current_provider_display():
-    """Get display string for current provider"""
+def get_provider_model_name():
+    """Returns user-friendly model name for current provider"""
     if current_provider == "groq":
-        return f"Groq ({current_llm})"
+        for name, model_id in allowed_llms["groq"].items():
+            if model_id == current_llm:
+                return name
+        return current_llm.split('/')[-1]
     else:
-        return f"OpenRouter ({openrouter_model})"
+        for name, model_id in allowed_llms["openrouter"].items():
+            if model_id == openrouter_model:
+                return name
+        return openrouter_model.split('/')[-1]
 
 async def make_groq_call(messages, system_msg):
-    """Make API call to Groq"""
-    global current_llm, current_model_list, current_model_index
-    
     payload = {
         "model": current_llm,
         "messages": [system_msg] + messages,
         "temperature": 0.7,
         "max_tokens": 1024
     }
-    
-    current_key = groq_keys[groq_key_index] if groq_keys else None
-    if not current_key:
+    if not groq_keys:
         return None, "No Groq keys available"
-    
+    current_key = groq_keys[groq_key_index]
     headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
-    
     try:
         async with aiohttp.ClientSession() as session:
             resp = await session.post(GROQ_API_URL, json=payload, headers=headers)
@@ -296,22 +285,18 @@ async def make_groq_call(messages, system_msg):
         return None, f"Exception: {e}"
 
 async def make_openrouter_call(messages, system_msg):
-    """Make API call to OpenRouter"""
     if not openrouter_key:
         return None, "OpenRouter not configured"
-    
     payload = {
         "model": openrouter_model,
         "messages": [system_msg] + messages,
         "temperature": 0.7,
         "max_tokens": 1024
     }
-    
     headers = {
         "Authorization": f"Bearer {openrouter_key}",
         "Content-Type": "application/json"
     }
-    
     try:
         async with aiohttp.ClientSession() as session:
             resp = await session.post(OPENROUTER_API_URL, json=payload, headers=headers)
@@ -330,10 +315,10 @@ async def ai_call(prompt):
     messages = []
     memory_msgs = saved_memory[-MAX_MEMORY:] if memory_enabled else []
     chat_msgs = saved_chats.get(current_chat, []) if current_chat else []
-    seen_responses = set()
+    seen = set()
     for role, content in memory_msgs + chat_msgs:
-        if (role, content) not in seen_responses:
-            seen_responses.add((role, content))
+        if (role, content) not in seen:
+            seen.add((role, content))
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": prompt})
     date = datetime.now(TZ_UAE).strftime("%Y-%m-%d")
@@ -343,38 +328,38 @@ async def ai_call(prompt):
         "content": f"Today in UAE date: {date}. {mode_prompt}\n\n{pen_archive}"
     }
     
-    # Try current provider first
-    for attempt in range(3):  # Max 3 attempts
+    for attempt in range(3):
         if current_provider == "groq":
             response, error = await make_groq_call(messages, system_msg)
             if error == "rate_limit":
-                # Handle rate limit by rotating keys or switching provider
                 result = handle_groq_rate_limit()
-                if result == "openrouter":
-                    continue  # Retry with OpenRouter
-                else:
-                    continue  # Retry with rotated Groq key
+                continue
             elif error:
+                # If Groq fails and OpenRouter is available, try that
+                if openrouter_enabled and current_provider != "openrouter":
+                    current_provider = "openrouter"
+                    continue
                 return f"❌ Error: {error}"
             else:
                 return response
         else:  # openrouter
             response, error = await make_openrouter_call(messages, system_msg)
             if error == "rate_limit":
-                # Try falling back to Groq if available
                 if groq_keys:
                     current_provider = "groq"
                     continue
                 else:
-                    return "❌ Rate limit exceeded on OpenRouter and no fallback available"
+                    return "❌ Rate limit on OpenRouter and no Groq fallback"
             elif error:
+                if groq_keys and current_provider != "groq":
+                    current_provider = "groq"
+                    continue
                 return f"❌ Error: {error}"
             else:
                 return response
-    
-    return "❌ All API attempts failed"
+    return "❌ All API attempts failed after retries."
 
-# Countdown helpers (unchanged)
+# Countdown helpers
 def get_next_dec19(now: datetime) -> datetime:
     year = now.year
     target = datetime(year, 12, 19, 0, 0, 0, tzinfo=now.tzinfo)
@@ -392,8 +377,8 @@ def format_countdown_to_dec19(now: datetime) -> str:
     target = get_next_dec19(now)
     months = 0
     while True:
-        next_month_date = add_months(now, months + 1)
-        if next_month_date <= target:
+        next_month = add_months(now, months + 1)
+        if next_month <= target:
             months += 1
         else:
             break
@@ -421,9 +406,11 @@ def format_countdown_to_dec19(now: datetime) -> str:
         parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
     return ", ".join(parts)
 
-# Image functions (unchanged from previous version)
+# Image functions (unchanged but fixed check_image_safety to use available provider)
 async def check_image_safety(prompt: str) -> str:
-    if has_forbidden_keywords(prompt):
+    def has_forbidden(p):
+        return any(kw in p.lower() for kw in FORBIDDEN_KEYWORDS)
+    if has_forbidden(prompt):
         print(f"🔍 Keyword filter triggered for prompt: {prompt}")
         return "AI:STOPIMAGE"
     checker_system = (
@@ -439,11 +426,11 @@ async def check_image_safety(prompt: str) -> str:
     model = "openai/gpt-oss-20b"
     payload = {"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 50}
     
-    # Try Groq first for safety check
+    # Try Groq first
     if groq_keys:
-        current_key = groq_keys[groq_key_index]
-        headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
         try:
+            current_key = groq_keys[groq_key_index]
+            headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
             async with aiohttp.ClientSession() as session:
                 resp = await session.post(GROQ_API_URL, json=payload, headers=headers)
                 if resp.status == 200:
@@ -451,11 +438,10 @@ async def check_image_safety(prompt: str) -> str:
                     return data["choices"][0]["message"]["content"].strip()
         except:
             pass
-    
-    # Fallback to OpenRouter
+    # Then OpenRouter
     if openrouter_key:
-        headers = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
         try:
+            headers = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
             async with aiohttp.ClientSession() as session:
                 resp = await session.post(OPENROUTER_API_URL, json=payload, headers=headers)
                 if resp.status == 200:
@@ -463,12 +449,7 @@ async def check_image_safety(prompt: str) -> str:
                     return data["choices"][0]["message"]["content"].strip()
         except:
             pass
-    
-    return "AI:STOPIMAGE"  # Conservative default
-
-def has_forbidden_keywords(prompt: str) -> bool:
-    lower_prompt = prompt.lower()
-    return any(keyword in lower_prompt for keyword in FORBIDDEN_KEYWORDS)
+    return "AI:STOPIMAGE"
 
 async def generate_pollinations_image(prompt: str) -> bytes:
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
@@ -481,6 +462,8 @@ async def generate_pollinations_image(prompt: str) -> bytes:
 
 async def generate_hf_image(prompt: str) -> bytes:
     global hf_key_index
+    if not hf_tokens:
+        raise Exception("No Hugging Face tokens configured")
     retries = 0
     max_retries = 3
     while retries < max_retries:
@@ -550,9 +533,9 @@ async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
     print(f"🔑 Groq keys: {len(groq_keys)}")
     print(f"🌐 OpenRouter: {'Enabled' if openrouter_enabled else 'Disabled'}")
-    print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
-    print(f"🧠 Current mode: {current_mode.upper()}")
-    print(f"🤖 Current provider: {get_current_provider_display()}")
+    print(f"🎨 Image mode: {current_image_mode.upper()}")
+    print(f"🧠 Chat mode: {current_mode.upper()}")
+    print(f"🤖 Provider: {current_provider.upper()} - {get_provider_model_name()}")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -566,52 +549,32 @@ async def on_message(message):
         return
 
     # Cooldown
-    now = datetime.now().timestamp()
-    if now - user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
+    now_ts = datetime.now().timestamp()
+    if now_ts - user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         return
-    user_cooldowns[message.author.id] = now
+    user_cooldowns[message.author.id] = now_ts
 
     txt = message.content.strip()
     cleaned_txt = txt.replace(bot.user.mention, "").strip()
 
-    # ----- Commands -----
+    # ----- Commands (processed before ping-only) -----
     if cleaned_txt == "/help":
         help_text = (
             "**🧠 MultiGPT Help Menu**\n\n"
-            "**How to Talk to the Bot:**\n"
-            "`@MultiGPT <your message>` → Ask the bot anything!\n\n"
+            "**Talk to the bot:** `@MultiGPT <message>`\n\n"
             "**API Providers & Models:**\n"
-            "`/cha-llm groq <model>` → Use Groq (llama3-70b, gpt-oss, gemma2-9b)\n"
-            "`/cha-llm openrouter <model>` → Use OpenRouter (cohere, qwen-free, qwen-plus, deepseek, mistral)\n"
-            "`/cur-llm` → Show current API provider and model\n"
-            "• Auto-fallback: Groq → OpenRouter if Groq fails\n\n"
-            "**Modes:**\n"
-            "`/chill` → Default casual mode\n"
-            "`/unhinged` → Unfiltered mode (swears constantly)\n"
-            "`/coder` → Programming expert mode\n"
-            "`/childish` → Childish mode (meme slang)\n\n"
-            "**Features:**\n"
-            "`/ra` → Toggle random annoying messages (every 3 hours)\n"
-            "`/fast` → Fast mode (gpt-oss-20b + Pollinations images)\n"
-            "`/smart` → Smart mode (llama3-70b + Hugging Face images)\n"
-            "`/pa` → Ping-only mode ON\n"
-            "`/pd` → Ping-only mode OFF\n"
-            "`/ds` → Soft reset\n"
-            "`/re` → Hard reset (clears everything)\n\n"
-            "**Saved Memory (SM):**\n"
-            "`/sm` → Enable memory | `/smo` → Disable memory\n"
-            "`/vsm` → View memory | `/csm` → Clear memory\n\n"
-            "**Saved Chats (SC):**\n"
-            "`/sc` → Start new chat | `/sco` → Close chat\n"
-            "`/vsc` → View chats | `/csc` → Clear chats\n"
-            "`/sc1`-`/sc5` → Load chat slots 1-5\n\n"
-            "**Image Generation:**\n"
-            "`/image [prompt]` → Generate an image (5 sec wait)\n"
-            "• Fast mode: Pollinations.ai (uploaded to ImgBB)\n"
-            "• Smart mode: Hugging Face SDXL (with safety checks)\n\n"
-            "**Countdown:**\n"
-            "`/countdown` → Time until Dec 19\n\n"
-            "🔧 More features coming soon!"
+            "`/cha-llm groq <model>` → Groq (llama3-70b, kimi-k2, gemma2-9b)\n"
+            "`/cha-llm openrouter <model>` → OpenRouter (cohere, qwen-free, qwen-plus, deepseek, mistral)\n"
+            "`/cur-llm` → Show current provider and model\n"
+            "• Auto‑fallback: Groq → OpenRouter on failure\n\n"
+            "**Modes:** `/chill` (default), `/unhinged`, `/coder`, `/childish`\n\n"
+            "**Features:** `/ra` (random annoying), `/fast` (kimi-k2 + Pollinations), `/smart` (llama3-70b + HF)\n"
+            "`/pa` (ping‑only ON), `/pd` (OFF), `/ds` (soft reset), `/re` (hard reset)\n\n"
+            "**Memory:** `/sm` (on), `/smo` (off), `/vsm` (view), `/csm` (clear)\n\n"
+            "**Saved Chats:** `/sc` (new), `/sco` (close), `/vsc` (list), `/csc` (clear), `/sc1`‑`/sc5` (load)\n\n"
+            "**Image:** `/image [prompt]` (5 sec wait)\n\n"
+            "**Countdown:** `/countdown` → time until Dec 19\n\n"
+            "🔧 More coming soon!"
         )
         await message.channel.send(help_text)
         return
@@ -625,97 +588,95 @@ async def on_message(message):
     # Mode switching
     if cleaned_txt == "/chill":
         current_mode = "chill"
-        await message.channel.send("😎 Switched to CHILL mode (default behavior)")
+        await message.channel.send("😎 Switched to CHILL mode")
         return
     if cleaned_txt == "/unhinged":
         current_mode = "unhinged"
-        await message.channel.send("😈 Switched to UNHINGED mode (swearing enabled)")
+        await message.channel.send("😈 Switched to UNHINGED mode")
         return
     if cleaned_txt == "/coder":
         current_mode = "coder"
-        await message.channel.send("💻 Switched to CODER mode (programming expert)")
+        await message.channel.send("💻 Switched to CODER mode")
         return
     if cleaned_txt == "/childish":
         current_mode = "childish"
-        await message.channel.send("👶 Switched to CHILDISH mode (meme slang enabled)")
+        await message.channel.send("👶 Switched to CHILDISH mode")
         return
 
     # Random annoying toggle
     if cleaned_txt == "/ra":
         if message.channel.id in annoying_channels:
             annoying_channels.discard(message.channel.id)
-            await message.channel.send("🔇 Random annoying messages turned OFF")
+            await message.channel.send("🔇 Random annoying messages OFF")
         else:
             annoying_channels.add(message.channel.id)
-            await message.channel.send("🔊 Random annoying messages turned ON! Sending every 3 hours")
+            await message.channel.send("🔊 Random annoying messages ON (every 3h)")
         return
 
     if cleaned_txt == "/pa":
         ping_only = True
-        await message.channel.send("✅ Ping-only ON.")
+        await message.channel.send("✅ Ping‑only ON")
         return
     if cleaned_txt == "/pd":
         ping_only = False
-        await message.channel.send("❌ Ping-only OFF.")
+        await message.channel.send("❌ Ping‑only OFF")
         return
 
     if cleaned_txt == "/ds":
         reset_defaults()
-        await message.channel.send("🔁 Settings reset to default (ping-only ON, memory OFF, CHILL mode, Groq provider).")
+        await message.channel.send("🔁 Soft reset (ping‑only ON, memory OFF, CHILL mode, Groq provider)")
         return
 
     if cleaned_txt == "/re":
         reset_defaults()
         saved_chats.clear()
         hf_disabled_until.clear()
-        await message.channel.send("💣 Hard reset complete — everything wiped.")
+        await message.channel.send("💣 Hard reset – everything wiped")
         return
 
-    # Model switching with provider support
+    # Change LLM / provider
     if cleaned_txt.startswith("/cha-llm"):
         parts = cleaned_txt.split()
         if len(parts) >= 2:
             provider = parts[1].lower()
-            
             if provider == "groq":
                 if not groq_keys:
-                    await message.channel.send("❌ Groq is not configured (no API keys)")
+                    await message.channel.send("❌ Groq not configured (no API keys)")
                     return
                 if len(parts) == 3 and parts[2] in allowed_llms["groq"]:
                     current_provider = "groq"
                     current_llm = allowed_llms["groq"][parts[2]]
-                    await message.channel.send(f"✅ Switched to Groq provider with model: `{parts[2]}`")
+                    await message.channel.send(f"✅ Switched to Groq with model `{parts[2]}`")
                 elif len(parts) == 2:
                     current_provider = "groq"
-                    await message.channel.send(f"✅ Switched to Groq provider (current model: `{get_provider_model_name()}`)")
+                    await message.channel.send(f"✅ Switched to Groq (current model: `{get_provider_model_name()}`)")
                 else:
                     await message.channel.send("❌ Invalid Groq model. Available: " + ", ".join(allowed_llms["groq"].keys()))
                 return
-                
             elif provider == "openrouter":
                 if not openrouter_enabled:
-                    await message.channel.send("❌ OpenRouter is not configured (no API key)")
+                    await message.channel.send("❌ OpenRouter not configured (no API key)")
                     return
                 if len(parts) == 3 and parts[2] in allowed_llms["openrouter"]:
                     current_provider = "openrouter"
                     openrouter_model = allowed_llms["openrouter"][parts[2]]
-                    await message.channel.send(f"✅ Switched to OpenRouter provider with model: `{parts[2]}`")
+                    await message.channel.send(f"✅ Switched to OpenRouter with model `{parts[2]}`")
                 elif len(parts) == 2:
                     current_provider = "openrouter"
-                    await message.channel.send(f"✅ Switched to OpenRouter provider (current model: `{get_provider_model_name()}`)")
+                    await message.channel.send(f"✅ Switched to OpenRouter (current model: `{get_provider_model_name()}`)")
                 else:
                     await message.channel.send("❌ Invalid OpenRouter model. Available: " + ", ".join(allowed_llms["openrouter"].keys()))
                 return
             else:
                 await message.channel.send("❌ Invalid provider. Use `groq` or `openrouter`")
                 return
-        await message.channel.send("❌ Usage: `/cha-llm <provider> [model]`\nExample: `/cha-llm groq llama3-70b` or `/cha-llm openrouter cohere`")
+        await message.channel.send("❌ Usage: `/cha-llm <provider> [model]`\nExample: `/cha-llm groq kimi-k2` or `/cha-llm openrouter cohere`")
         return
 
     if cleaned_txt == "/cur-llm":
         provider_display = "Groq" if current_provider == "groq" else "OpenRouter"
-        model_display = get_provider_model_name()
-        await message.channel.send(f"🔍 **Current Configuration**\n• Provider: `{provider_display}`\n• Model: `{model_display}`")
+        model_name = get_provider_model_name()
+        await message.channel.send(f"🔍 **Current Configuration**\n• Provider: `{provider_display}`\n• Model: `{model_name}`")
         return
 
     if cleaned_txt == "/fast":
@@ -724,9 +685,9 @@ async def on_message(message):
         current_quality_mode = "fast"
         current_model_list = fast_models
         current_model_index = 0
-        current_llm = fast_models[0]
+        current_llm = fast_models[0]   # kimi-k2
         current_image_mode = "fast"
-        await message.channel.send("⚡ Switched to FAST mode (gpt-oss-20b + Pollinations)")
+        await message.channel.send("⚡ Switched to FAST mode (kimi-k2 + Pollinations)")
         return
 
     if cleaned_txt == "/smart":
@@ -735,7 +696,7 @@ async def on_message(message):
         current_quality_mode = "smart"
         current_model_list = smart_models
         current_model_index = 0
-        current_llm = smart_models[0]
+        current_llm = smart_models[0]   # llama3-70b
         current_image_mode = "smart"
         hf_key_index = 0
         current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -749,12 +710,12 @@ async def on_message(message):
         if slot in saved_chats:
             current_chat = slot
             await message.channel.send(f"🚀 Switched to chat #{slot}")
-            return
-        await message.channel.send(f"❌ No saved chat #{slot}")
+        else:
+            await message.channel.send(f"❌ No saved chat #{slot}")
         return
     if cleaned_txt == "/sc":
         if len(saved_chats) >= MAX_SAVED:
-            await message.channel.send("❌ Max chats reached")
+            await message.channel.send("❌ Max chats reached (5)")
             return
         slot = max(saved_chats.keys(), default=0) + 1
         saved_chats[slot] = []
@@ -763,41 +724,41 @@ async def on_message(message):
         return
     if cleaned_txt == "/sco":
         current_chat = None
-        await message.channel.send("📂 Closed chat")
+        await message.channel.send("📂 Closed current saved chat")
         return
     if cleaned_txt == "/vsc":
         if not saved_chats:
-            await message.channel.send("No chats saved")
+            await message.channel.send("No saved chats")
             return
-        await message.channel.send("\n".join(f"#{k}: {len(v)} msgs" for k, v in saved_chats.items()))
+        await message.channel.send("\n".join(f"#{k}: {len(v)} messages" for k, v in saved_chats.items()))
         return
     if cleaned_txt == "/csc":
         saved_chats.clear()
         current_chat = None
-        await message.channel.send("🧹 Chats cleared")
+        await message.channel.send("🧹 All saved chats cleared")
         return
 
     # Memory commands
     if cleaned_txt == "/sm":
         memory_enabled = True
-        await message.channel.send("🧠 Memory ON")
+        await message.channel.send("🧠 Memory ENABLED")
         return
     if cleaned_txt == "/smo":
         memory_enabled = False
-        await message.channel.send("🧠 Memory OFF")
+        await message.channel.send("🧠 Memory DISABLED")
         return
     if cleaned_txt == "/vsm":
         if not saved_memory:
-            await message.channel.send("No memory saved")
+            await message.channel.send("No memory entries")
             return
-        await message.channel.send("\n".join(f"[{r}] {c}" for r, c in saved_memory))
+        await message.channel.send("\n".join(f"[{r}] {c}" for r, c in saved_memory[-10:]))
         return
     if cleaned_txt == "/csm":
         saved_memory.clear()
         await message.channel.send("🧹 Memory cleared")
         return
 
-    # Image generation (unchanged)
+    # Image generation
     if cleaned_txt.lower().startswith("/image"):
         parts = cleaned_txt.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -808,45 +769,37 @@ async def on_message(message):
         now_time = time.time()
 
         if current_image_mode == "smart" and channel_id in hf_disabled_until and now_time < hf_disabled_until[channel_id]:
-            remaining_min = int((hf_disabled_until[channel_id] - now_time) / 60)
-            await message.channel.send(f"❌ Smart image generation is temporarily disabled in this channel due to a previous inappropriate request. {remaining_min} minutes remaining.")
+            remaining = int((hf_disabled_until[channel_id] - now_time) / 60)
+            await message.channel.send(f"❌ Smart image disabled for {remaining} min (inappropriate prompt)")
             return
 
         if current_image_mode == "smart":
-            safety_check = await check_image_safety(prompt)
-            if "AI:STOPIMAGE" in safety_check.upper():
+            safety = await check_image_safety(prompt)
+            if "AI:STOPIMAGE" in safety.upper():
                 hf_disabled_until[channel_id] = now_time + 30 * 60
-                await message.channel.send("❌ That image prompt appears to be inappropriate. Smart image generation has been disabled in this channel for 30 minutes.")
+                await message.channel.send("❌ Inappropriate prompt – smart image disabled for 30 minutes")
                 return
 
         mode_display = "⚡ FAST (Pollinations)" if current_image_mode == "fast" else "🧠 SMART (Hugging Face)"
-        msg = await message.channel.send(f"🖼️ Generating image with {mode_display} for: **{prompt}**...")
+        msg = await message.channel.send(f"🖼️ Generating {mode_display} image for: **{prompt}**...")
         await asyncio.sleep(5)
 
         try:
             if current_image_mode == "fast":
-                image_data = await generate_pollinations_image(prompt)
-                hosted_url = await upload_image_to_hosting(image_data)
-                embed = discord.Embed(
-                    title=f"Image: {prompt}",
-                    description="Generated by Pollinations AI",
-                    color=0x3498db
-                )
-                embed.set_image(url=hosted_url)
+                img_data = await generate_pollinations_image(prompt)
+                url = await upload_image_to_hosting(img_data)
+                embed = discord.Embed(title=f"Image: {prompt}", color=0x3498db)
+                embed.set_image(url=url)
                 embed.add_field(name="Prompt", value=prompt, inline=False)
                 embed.add_field(name="Mode", value="⚡ Fast (Pollinations)", inline=False)
                 embed.set_footer(text="Powered by Pollinations AI")
                 await msg.edit(content=f"🖼️ Here's your image for **{prompt}**", embed=embed)
             else:
-                image_data = await generate_hf_image(prompt)
-                hosted_url = await upload_image_to_hosting(image_data)
+                img_data = await generate_hf_image(prompt)
+                url = await upload_image_to_hosting(img_data)
                 model_display = current_hf_model.split('/')[-1].replace('-', ' ').title()
-                embed = discord.Embed(
-                    title=f"HQ Image: {prompt}",
-                    description="Generated by Hugging Face",
-                    color=0x9b59b6
-                )
-                embed.set_image(url=hosted_url)
+                embed = discord.Embed(title=f"HQ Image: {prompt}", color=0x9b59b6)
+                embed.set_image(url=url)
                 embed.add_field(name="Prompt", value=prompt, inline=False)
                 embed.add_field(name="Mode", value="🧠 Smart (Hugging Face)", inline=False)
                 embed.add_field(name="Model", value=model_display, inline=False)
@@ -857,20 +810,7 @@ async def on_message(message):
             await msg.edit(content=f"❌ Image generation failed: {str(e)}")
         return
 
-    # Helper function to get model name
-    def get_provider_model_name():
-        if current_provider == "groq":
-            for name, model_id in allowed_llms["groq"].items():
-                if model_id == current_llm:
-                    return name
-            return current_llm
-        else:
-            for name, model_id in allowed_llms["openrouter"].items():
-                if model_id == openrouter_model:
-                    return name
-            return openrouter_model
-
-    # Ping-only mode check
+    # Ping-only mode: ignore if not mentioned
     if ping_only and bot.user.mention not in txt:
         return
 
@@ -886,12 +826,11 @@ async def on_message(message):
             saved_memory.pop(0)
         saved_memory.append(("user", prompt))
 
-    thinking = await message.channel.send("MultiGPT is typing.")
+    thinking = await message.channel.send("MultiGPT is typing...")
     response = await ai_call(prompt) or "❌ No reply."
     response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
     await thinking.edit(content=response)
 
-    # Store assistant response
     if current_chat:
         saved_chats[current_chat].append(("assistant", response))
     if memory_enabled:
@@ -901,7 +840,7 @@ async def on_message(message):
 # Web server for health checks
 # ------------------------------
 async def handle_root(request):
-    return web.Response(text="✅ Bot running!")
+    return web.Response(text="✅ MultiGPT bot running")
 
 async def handle_health(request):
     return web.Response(text="OK")

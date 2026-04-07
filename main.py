@@ -318,8 +318,9 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
     global video_jobs
     encoded_prompt = urllib.parse.quote(prompt)
     
-    # Updated model to LTX-2.3 as requested
-    video_model = "LTX-2.3"
+    # Use a valid video model from the allowed list
+    # Options: "wan", "seedance", "seedance-pro", "veo", "kontext"
+    video_model = "wan"   # <-- Changed from "LTX-2.3" to a supported model
     
     url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}&model={video_model}"
    
@@ -328,14 +329,13 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
         "Accept": "video/mp4,application/json,*/*"
     }
 
-    # Add API key if set (recommended header)
     if pollinations_api_key:
         headers["Authorization"] = f"Bearer {pollinations_api_key}"
         print(f"🔑 Using Pollinations API key for video generation")
     else:
         print("⚠️ No POLLINATIONS_API_KEY set — video may fail (401 Unauthorized)")
 
-    timeout = aiohttp.ClientTimeout(total=300)  # Increased to 5 minutes for video generation
+    timeout = aiohttp.ClientTimeout(total=300)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers, allow_redirects=True) as resp:

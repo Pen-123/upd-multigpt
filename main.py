@@ -318,7 +318,7 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
         return
 
     try:
-        submit_url = "https://api.siliconflow.cn/v1/video/submit"
+        submit_url = "https://api.siliconflow.com/v1/video/submit"
         headers = {
             "Authorization": f"Bearer {siliconflow_api_key}",
             "Content-Type": "application/json"
@@ -345,7 +345,7 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
             await status_message.edit(content=f"🎬 Video generation queued (ID: {request_id})\nGenerating your video... This may take 1–3 minutes.")
 
             # Step 2: Poll for completion
-            status_url = "https://api.siliconflow.cn/v1/video/status"
+            status_url = "https://api.siliconflow.com/v1/video/status"
             max_attempts = 40  # ~4 minutes max
             for attempt in range(max_attempts):
                 await asyncio.sleep(10)

@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import calendar
 import discord
 from discord import Intents
-from aiohttp import web  # <-- 修复：添加 aiohttp.web 导入
+from aiohttp import web  # <-- Added missing import
 
 # ------------------------------
 # Configuration
@@ -113,6 +113,7 @@ def reset_defaults():
     saved_memory.clear()
     current_mode = "chill"
 
+# FIXED: Removed stray 'r' characters after strings
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"
@@ -234,7 +235,6 @@ def get_next_available_model():
         if model_cooldowns.get(model, 0) <= now:
             current_model_index = next_index
             return model
-    # fallback – return first model even if cooled down
     return current_model_list[0]
 
 def has_forbidden_keywords(prompt: str) -> bool:
@@ -470,7 +470,7 @@ async def ai_call(prompt):
     except Exception as e:
         return f"❌ Error: {e}"
 
-# Countdown helpers (unchanged)
+# Countdown helpers
 def get_next_dec19(now: datetime) -> datetime:
     year = now.year
     target = datetime(year, 12, 19, 0, 0, 0, tzinfo=now.tzinfo)
@@ -543,7 +543,6 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    # 修复：移除了未定义的 POLLINATIONS_VIDEO_URL 打印，改为 Kling 状态打印
     print(f"🎬 Video generation using Kling AI (AK: {KLING_AK[:4]}...)")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
@@ -838,7 +837,6 @@ async def on_message(message):
             await message.channel.send("❌ Please provide an image prompt.\nUsage: `/image a cat wearing sunglasses`")
             return
 
-        # Safety check for smart mode
         if current_image_mode == "smart":
             safety_result = await check_image_safety(prompt)
             if safety_result == "AI:STOPIMAGE":
@@ -849,12 +847,10 @@ async def on_message(message):
 
         try:
             if current_image_mode == "fast":
-                # Fast mode: Pollinations
                 image_data = await generate_pollinations_image(prompt)
                 image_url = await upload_image_to_hosting(image_data)
                 await status_msg.edit(content=f"🎨 **Fast Image:** {image_url}")
             else:
-                # Smart mode: Hugging Face
                 image_data = await generate_hf_image(prompt)
                 image_url = await upload_image_to_hosting(image_data)
                 await status_msg.edit(content=f"🧠 **Smart Image:** {image_url}")
@@ -871,34 +867,23 @@ async def on_message(message):
     if not prompt:
         return
 
-    # Add to saved chat if active
     if current_chat:
         if current_chat not in saved_chats:
             saved_chats[current_chat] = []
         saved_chats[current_chat].append(("user", prompt))
-        # Limit saved chat size
         if len(saved_chats[current_chat]) > MAX_SAVED * 10:
             saved_chats[current_chat] = saved_chats[current_chat][-MAX_SAVED * 10:]
 
-    # Add to memory if enabled
     if memory_enabled:
         saved_memory.append(("user", prompt))
         if len(saved_memory) > MAX_MEMORY:
             saved_memory.pop(0)
 
-    # Show typing indicator
     thinking = await message.channel.send("🤔 MultiGPT is thinking...")
-
-    # Get AI response
     response = await ai_call(prompt)
-
-    # Clean up response (remove thinking tags if any)
     response = re.sub(r'<think>.*?<think>', '', response, flags=re.DOTALL).strip()
-
-    # Edit thinking message with response
     await thinking.edit(content=response[:2000] if len(response) <= 2000 else response[:1997] + "...")
 
-    # Save response to chat/memory
     if current_chat:
         saved_chats[current_chat].append(("assistant", response))
     if memory_enabled:

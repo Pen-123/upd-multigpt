@@ -342,60 +342,82 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
             else:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
-async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
-    """Generate video using Pollinations AI with API key (official docs)."""
-    global video_jobs
-    encoded_prompt = urllib.parse.quote(prompt)
-    
-    # Use a valid video model from the allowed list
-    # Options: "wan", "seedance", "seedance-pro", "veo", "kontext"
-    video_model = "ltx-2"
-    
-    url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}&model={video_model}"
-   
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; MultiGPT-Bot/1.0)",
-        "Accept": "video/mp4,application/json,*/*"
+def get_kling_token():
+    """Generates the mandatory JWT token for Kling API authentication."""
+    payload = {
+        "iss": KLING_AK,
+        "exp": int(time.time()) + 1800, # Token valid for 30 mins
+        "nbf": int(time.time()) - 5
     }
+    return jwt.encode(payload, KLING_SK, algorithm="HS256")
 
-    if pollinations_api_key:
-        headers["Authorization"] = f"Bearer {pollinations_api_key}"
-        print(f"🔑 Using Pollinations API key for video generation")
-    else:
-        print("⚠️ No POLLINATIONS_API_KEY set — video may fail (401 Unauthorized)")
-
-    timeout = aiohttp.ClientTimeout(total=300)
+async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
+    """Kling AI Video Generation Logic: Submission + Polling"""
+    global video_jobs
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers, allow_redirects=True) as resp:
-                if resp.status == 200:
-                    content_type = resp.headers.get('Content-Type', '')
-                    if 'video' in content_type or 'mp4' in content_type:
-                        video_data = await resp.read()
-                        if len(video_data) < 10000:
-                            raise Exception(f"Received small file ({len(video_data)} bytes), not a valid video")
-                        await status_message.edit(content=f"🎥 Video ready for: **{prompt}**")
+        token = get_kling_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Kling handles 5s or 10s. We'll map your 'seconds' input to the closest match.
+        duration = "10" if seconds > 5 else "5"
+        payload = {
+            "model_name": "kling-v1",
+            "prompt": prompt,
+            "duration": duration
+        }
+
+        async with aiohttp.ClientSession() as session:
+            # Step 1: Submit the task to Kling
+            submit_url = "https://api.klingai.com/v1/videos/text2video"
+            async with session.post(submit_url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    error_data = await resp.text()
+                    raise Exception(f"Kling Submission Failed ({resp.status}): {error_data}")
+                
+                data = await resp.json()
+                if data.get("code") != 0:
+                    raise Exception(f"Kling API Error: {data.get('message')}")
+                
+                task_id = data["data"]["task_id"]
+            
+            await status_message.edit(content=f"🎬 Task accepted by Kling! (ID: {task_id})\nGenerating your {duration}s video. This usually takes 1-3 minutes...")
+
+            # Step 2: Poll the API until the video is ready
+            poll_url = f"https://api.klingai.com/v1/videos/text2video/{task_id}"
+            while True:
+                await asyncio.sleep(15) # Poll every 15 seconds to avoid spamming
+                async with session.get(poll_url, headers=headers) as poll_resp:
+                    poll_data = await poll_resp.json()
+                    status = poll_data.get("data", {}).get("task_status")
+                    
+                    if status == "succeed":
+                        video_url = poll_data["data"]["task_result"]["videos"][0]["url"]
+                        
+                        # Download the final video
+                        async with session.get(video_url) as vid_resp:
+                            video_bytes = await vid_resp.read()
+                        
+                        await status_message.edit(content=f"✅ **Video Rendered!**\nPrompt: *{prompt}*")
                         await status_message.channel.send(
-                            content=f"Here's your {seconds}s video for: **{prompt}**",
-                            file=discord.File(io.BytesIO(video_data), filename="generated_video.mp4")
+                            content=f"Here is your {duration}s cinematic clip:",
+                            file=discord.File(io.BytesIO(video_bytes), filename="kling_render.mp4")
                         )
-                    else:
-                        text = await resp.text()
-                        try:
-                            data = json.loads(text)
-                            raise Exception(f"API returned JSON instead of video: {text[:200]}")
-                        except json.JSONDecodeError:
-                            raise Exception(f"Unexpected response: {text[:200]}")
-                else:
-                    error_text = await resp.text()
-                    raise Exception(f"Pollinations video error {resp.status}: {error_text[:500]}")
-    except asyncio.TimeoutError:
-        await status_message.edit(content=f"❌ Video generation timed out after 5 minutes for: **{prompt}**")
+                        break
+                    
+                    elif status in ["failed", 99]:
+                        raise Exception("Kling internal server error during rendering.")
+                    
+                    # If status is 'submitted' or 'processing', the loop continues...
+
     except Exception as e:
-        await status_message.edit(content=f"❌ Video generation failed: {str(e)}")
+        print(f"VIDEO ERROR: {e}")
+        await status_message.edit(content=f"❌ **Video Generation Failed**\nError: `{str(e)}`")
     finally:
         video_jobs.pop(user_id, None)
-
+        
 async def generate_music(prompt: str, user_id: int, status_message: discord.Message):
     """Generate music using Pollinations AI."""
     global music_jobs

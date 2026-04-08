@@ -324,7 +324,7 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
     
     # Use a valid video model from the allowed list
     # Options: "wan", "seedance", "seedance-pro", "veo", "kontext"
-    video_model = "wan"
+    video_model = "ltx-2"
     
     url = f"{POLLINATIONS_VIDEO_URL}/{encoded_prompt}?duration={seconds}&model={video_model}"
    

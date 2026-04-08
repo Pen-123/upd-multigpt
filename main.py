@@ -27,7 +27,7 @@ hf_tokens = [t for t in [hf_token, hf_token2] if t]
 imgbb_api_key = os.getenv("HF_IMAGES")
 pollinations_api_key = os.getenv("POLLINATIONS_API_KEY") or "sk_e9Gh0E5vQH0UQUhiZ9gRdJCmTYspFtB9"
 
-# SiliconFlow API Key (used for video generation)
+# SiliconFlow API Key (for video generation)
 siliconflow_api_key = os.getenv("SILICONFLOW_API_KEY")
 if not siliconflow_api_key:
     print("⚠️ SILICONFLOW_API_KEY not set – video generation will fail.")
@@ -310,70 +310,68 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
             else:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
-async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
-    """Generate video using SiliconFlow API."""
+async def generate_video(prompt: str, user_id: int, status_message: discord.Message):
+    """Generate video using SiliconFlow API (Wan-AI model)."""
     global video_jobs
     if not siliconflow_api_key:
         await status_message.edit(content="❌ SiliconFlow API key not configured. Set SILICONFLOW_API_KEY.")
         return
 
     try:
-        # SiliconFlow video generation endpoint
-        submit_url = "https://api.siliconflow.cn/v1/video/generations"
+        submit_url = "https://api.siliconflow.cn/v1/video/submit"
         headers = {
             "Authorization": f"Bearer {siliconflow_api_key}",
             "Content-Type": "application/json"
         }
 
-        # Map seconds to a duration string acceptable by the model (e.g., "5s", "10s")
-        duration_str = f"{seconds}s"
-
+        # Using Wan-AI free model, 720p landscape by default
         payload = {
-            "model": "LTX-Video",           # SiliconFlow's text-to-video model
+            "model": "Wan-AI/Wan2.1-T2V-14B-720P-Turbo",
             "prompt": prompt,
-            "duration": duration_str,       # e.g., "5s" or "10s"
-            "num_inference_steps": 50,      # Optional, adjust for quality/speed
-            "guidance_scale": 7.5           # Optional
+            "image_size": "1280x720"
         }
 
         async with aiohttp.ClientSession() as session:
-            # Submit generation request
+            # Step 1: Submit generation request
             async with session.post(submit_url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
                     raise Exception(f"SiliconFlow submission failed ({resp.status}): {error_text}")
                 data = await resp.json()
-                task_id = data.get("id")
-                if not task_id:
-                    raise Exception("No task ID returned from SiliconFlow.")
+                request_id = data.get("requestId")
+                if not request_id:
+                    raise Exception("No requestId returned from SiliconFlow.")
 
-            await status_message.edit(content=f"🎬 Video generation started (ID: {task_id})\nGenerating your {seconds}s clip. This may take 1–3 minutes...")
+            await status_message.edit(content=f"🎬 Video generation queued (ID: {request_id})\nGenerating your video... This may take 1–3 minutes.")
 
-            # Poll for completion
-            poll_url = f"https://api.siliconflow.cn/v1/video/status/{task_id}"
-            max_attempts = 30  # ~5 minutes max
+            # Step 2: Poll for completion
+            status_url = "https://api.siliconflow.cn/v1/video/status"
+            max_attempts = 40  # ~4 minutes max
             for attempt in range(max_attempts):
                 await asyncio.sleep(10)
-                async with session.get(poll_url, headers=headers) as poll_resp:
+                async with session.post(status_url, headers=headers, json={"requestId": request_id}) as poll_resp:
                     if poll_resp.status != 200:
                         continue
                     poll_data = await poll_resp.json()
                     status = poll_data.get("status")
-                    if status == "succeeded":
-                        video_url = poll_data.get("video_url")
+                    if status == "Succeed":
+                        results = poll_data.get("results", {})
+                        video_url = results.get("video_url")
                         if not video_url:
                             raise Exception("No video URL in succeeded response.")
+                        # Download video
                         async with session.get(video_url) as vid_resp:
                             video_bytes = await vid_resp.read()
                         await status_message.edit(content=f"✅ **Video Ready!**\nPrompt: *{prompt}*")
                         await status_message.channel.send(
-                            content=f"Here is your {seconds}s video:",
+                            content=f"Here is your video:",
                             file=discord.File(io.BytesIO(video_bytes), filename="siliconflow_video.mp4")
                         )
                         break
-                    elif status == "failed":
-                        error_msg = poll_data.get("error", "Unknown error")
-                        raise Exception(f"Video generation failed: {error_msg}")
+                    elif status == "Failed":
+                        reason = poll_data.get("reason", "Unknown error")
+                        raise Exception(f"Video generation failed: {reason}")
+                    # else InQueue or InProgress - continue polling
             else:
                 raise Exception("Video generation timed out.")
     except Exception as e:
@@ -534,7 +532,7 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    print(f"🎬 Video generation using SiliconFlow (API key {'set' if siliconflow_api_key else 'NOT SET'})")
+    print(f"🎬 Video generation using SiliconFlow Wan-AI (API key {'set' if siliconflow_api_key else 'NOT SET'})")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -565,8 +563,8 @@ async def on_message(message):
             "`/unhinged` → Unfiltered mode (swears constantly)\n"
             "`/coder` → Programming expert mode\n"
             "`/childish` → Childish mode (meme slang)\n\n"
-            "**Video Generation (SiliconFlow):**\n"
-            "`/video <seconds> <prompt>` → Generate a video (max 10 seconds)\n"
+            "**Video Generation (SiliconFlow Wan-AI):**\n"
+            "`/video <prompt>` → Generate a short video (5-6 seconds)\n"
             "`/vp` → Check status of your video\n\n"
             "**Music Generation (Pollinations AI):**\n"
             "`/music <prompt>` → Generate music/audio from text\n"
@@ -610,34 +608,26 @@ async def on_message(message):
             await message.channel.send("No active video generation. Use `/video` to start one.")
         return
 
-    # Video generation command
+    # Video generation command (updated - no seconds parameter)
     if cleaned_txt.lower().startswith("/video"):
-        parts = cleaned_txt.split(maxsplit=2)
-        if len(parts) < 3:
-            await message.channel.send("❗ Usage: `/video <seconds> <prompt>`\nExample: `/video 5 a cat playing guitar`")
+        parts = cleaned_txt.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.channel.send("❗ Usage: `/video <prompt>`\nExample: `/video a cat playing guitar`")
             return
-        try:
-            seconds = int(parts[1])
-            if seconds < 1 or seconds > 10:
-                await message.channel.send("❌ Seconds must be between 1 and 10.")
-                return
-        except ValueError:
-            await message.channel.send("❌ Seconds must be a number (1-10).")
-            return
-        prompt = parts[2].strip()
+        prompt = parts[1].strip()
         if not prompt:
             await message.channel.send("❌ Please provide a video prompt.")
             return
         if message.author.id in video_jobs:
             await message.channel.send("❌ You already have a video generating. Use `/vp` to check progress.")
             return
-        status_msg = await message.channel.send(f"🎬 Generating {seconds}s video for: **{prompt}**... This may take up to 5 minutes.")
+        status_msg = await message.channel.send(f"🎬 Generating video for: **{prompt}**... This may take up to 3 minutes.")
         video_jobs[message.author.id] = {
             "status": "generating",
             "message": status_msg,
             "prompt": prompt
         }
-        asyncio.create_task(generate_video(seconds, prompt, message.author.id, status_msg))
+        asyncio.create_task(generate_video(prompt, message.author.id, status_msg))
         return
 
     # Music progress check

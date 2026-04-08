@@ -73,7 +73,6 @@ current_quality_mode = "smart"
 current_model_list = smart_models
 current_model_index = 0
 current_llm = smart_models[0]
-
 video_jobs = {}
 music_jobs = {}
 
@@ -168,7 +167,6 @@ allowed_llms = {
 
 user_cooldowns = {}
 USER_COOLDOWN_SECONDS = 5
-
 annoying_channels = set()
 RANDOM_ANNOYING_MESSAGES = [
     "OH MY GOD HARDER OHH UGHHHH skibidi toilet gyatt on my mind diddy daddy diddy daddy diddy daddy",
@@ -178,7 +176,6 @@ RANDOM_ANNOYING_MESSAGES = [
     "skibidi toilet OOOOOOOOOOOOH i love skibidi toilet episode 93242 it has a \"story\"",
     "meme klollolololo so funny aUHGUIGHI gyatt gyatt gyatt gyatt gyatt on my mindGHW[O"
 ]
-
 FORBIDDEN_KEYWORDS = [
     "naked", "nude", "nudes", "porn", "porno", "sex", "sexy", "nsfw", "hentai", "ecchi",
     "breast", "boob", "boobs", "nipple", "nipples", "ass", "butt", "pussy", "cock", "dick",
@@ -311,20 +308,21 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 async def generate_video(prompt: str, user_id: int, status_message: discord.Message):
-    """Generate video using SiliconFlow API (Wan-AI model)."""
+    """Generate video using SiliconFlow API (latest Wan2.2-T2V-A14B model)."""
     global video_jobs
     if not siliconflow_api_key:
         await status_message.edit(content="❌ SiliconFlow API key not configured. Set SILICONFLOW_API_KEY.")
         return
-
     try:
         submit_url = "https://api.siliconflow.com/v1/video/submit"
+        status_url = "https://api.siliconflow.com/v1/video/status"
+
         headers = {
             "Authorization": f"Bearer {siliconflow_api_key}",
             "Content-Type": "application/json"
         }
 
-        # Using Wan-AI free model, 720p landscape by default
+        # Updated to the latest Wan2.2 model (MoE architecture, 5s 720p video)
         payload = {
             "model": "Wan-AI/Wan2.2-T2V-A14B",
             "prompt": prompt,
@@ -345,7 +343,6 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
             await status_message.edit(content=f"🎬 Video generation queued (ID: {request_id})\nGenerating your video... This may take 1–3 minutes.")
 
             # Step 2: Poll for completion
-            status_url = "https://api.siliconflow.com/v1/video/status"
             max_attempts = 40  # ~4 minutes max
             for attempt in range(max_attempts):
                 await asyncio.sleep(10)
@@ -374,6 +371,7 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
                     # else InQueue or InProgress - continue polling
             else:
                 raise Exception("Video generation timed out.")
+
     except Exception as e:
         print(f"VIDEO ERROR: {e}")
         await status_message.edit(content=f"❌ **Video Generation Failed**\nError: `{str(e)}`")
@@ -532,7 +530,7 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    print(f"🎬 Video generation using SiliconFlow Wan-AI (API key {'set' if siliconflow_api_key else 'NOT SET'})")
+    print(f"🎬 Video generation using SiliconFlow Wan2.2-T2V-A14B (API key {'set' if siliconflow_api_key else 'NOT SET'})")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -541,15 +539,12 @@ async def on_message(message):
     global ping_only, current_chat, memory_enabled, current_llm, current_image_mode, current_mode
     global current_quality_mode, current_model_list, current_model_index
     global hf_key_index, current_hf_model, video_jobs, music_jobs
-
     if message.author == bot.user:
         return
-
     now = datetime.now().timestamp()
     if now - user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         return
     user_cooldowns[message.author.id] = now
-
     txt = message.content.strip()
     cleaned_txt = txt.replace(bot.user.mention, "").strip()
 
@@ -563,7 +558,7 @@ async def on_message(message):
             "`/unhinged` → Unfiltered mode (swears constantly)\n"
             "`/coder` → Programming expert mode\n"
             "`/childish` → Childish mode (meme slang)\n\n"
-            "**Video Generation (SiliconFlow Wan-AI):**\n"
+            "**Video Generation (SiliconFlow Wan2.2):**\n"
             "`/video <prompt>` → Generate a short video (5-6 seconds)\n"
             "`/vp` → Check status of your video\n\n"
             "**Music Generation (Pollinations AI):**\n"
@@ -608,7 +603,7 @@ async def on_message(message):
             await message.channel.send("No active video generation. Use `/video` to start one.")
         return
 
-    # Video generation command (updated - no seconds parameter)
+    # Video generation command
     if cleaned_txt.lower().startswith("/video"):
         parts = cleaned_txt.split(maxsplit=1)
         if len(parts) < 2:
@@ -816,15 +811,12 @@ async def on_message(message):
         if not prompt:
             await message.channel.send("❌ Please provide an image prompt.\nUsage: `/image a cat wearing sunglasses`")
             return
-
         if current_image_mode == "smart":
             safety_result = await check_image_safety(prompt)
             if safety_result == "AI:STOPIMAGE":
                 await message.channel.send("🚫 **Image generation blocked:** This prompt contains inappropriate content.")
                 return
-
         status_msg = await message.channel.send(f"🎨 Generating image: **{prompt}**...")
-
         try:
             if current_image_mode == "fast":
                 image_data = await generate_pollinations_image(prompt)
@@ -846,24 +838,20 @@ async def on_message(message):
     prompt = txt.replace(bot.user.mention, "").strip()
     if not prompt:
         return
-
     if current_chat:
         if current_chat not in saved_chats:
             saved_chats[current_chat] = []
         saved_chats[current_chat].append(("user", prompt))
         if len(saved_chats[current_chat]) > MAX_SAVED * 10:
             saved_chats[current_chat] = saved_chats[current_chat][-MAX_SAVED * 10:]
-
     if memory_enabled:
         saved_memory.append(("user", prompt))
         if len(saved_memory) > MAX_MEMORY:
             saved_memory.pop(0)
-
     thinking = await message.channel.send("🤔 MultiGPT is thinking...")
     response = await ai_call(prompt)
     response = re.sub(r'<think>.*?<think>', '', response, flags=re.DOTALL).strip()
     await thinking.edit(content=response[:2000] if len(response) <= 2000 else response[:1997] + "...")
-
     if current_chat:
         saved_chats[current_chat].append(("assistant", response))
     if memory_enabled:

@@ -326,7 +326,7 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
 
         # Using Wan-AI free model, 720p landscape by default
         payload = {
-            "model": "Wan-AI/Wan2.1-T2V-14B-720P-Turbo",
+            "model": "Wan-AI/Wan2.2-T2V-A14B",
             "prompt": prompt,
             "image_size": "1280x720"
         }

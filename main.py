@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import calendar
 import discord
 from discord import Intents
-from aiohttp import web  # <-- Added missing import
+from aiohttp import web  # ✅ CRITICAL FIX: Import web module
 
 # ------------------------------
 # Configuration
@@ -74,8 +74,8 @@ current_model_list = smart_models
 current_model_index = 0
 current_llm = smart_models[0]
 
-video_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
-music_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
+video_jobs = {}
+music_jobs = {}
 
 # ------------------------------
 # Helper functions
@@ -113,7 +113,7 @@ def reset_defaults():
     saved_memory.clear()
     current_mode = "chill"
 
-# FIXED: Removed stray 'r' characters after strings
+# ✅ Fixed: Removed stray 'r' characters
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"
@@ -176,11 +176,9 @@ allowed_llms = {
     "gemma2-9b": "google/gemma2-9b-it"
 }
 
-# Cooldown system
 user_cooldowns = {}
 USER_COOLDOWN_SECONDS = 5
 
-# Random annoying messages
 annoying_channels = set()
 RANDOM_ANNOYING_MESSAGES = [
     "OH MY GOD HARDER OHH UGHHHH skibidi toilet gyatt on my mind diddy daddy diddy daddy diddy daddy",
@@ -198,9 +196,6 @@ FORBIDDEN_KEYWORDS = [
     "bikini", "lingerie", "thong", "topless", "bottomless", "explicit", "erotic", "adult"
 ]
 
-# ------------------------------
-# Helper functions (continued)
-# ------------------------------
 def rotate_api_key():
     global key_index
     key = api_keys[key_index]
@@ -326,7 +321,6 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
-    """Kling AI Video Generation Logic: Submission + Polling"""
     global video_jobs
     try:
         token = get_kling_token()
@@ -334,36 +328,29 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-
         duration = "10" if seconds > 5 else "5"
         payload = {
             "model_name": "kling-v1",
             "prompt": prompt,
             "duration": duration
         }
-
         async with aiohttp.ClientSession() as session:
             submit_url = "https://api.klingai.com/v1/videos/text2video"
             async with session.post(submit_url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     error_data = await resp.text()
                     raise Exception(f"Kling Submission Failed ({resp.status}): {error_data}")
-
                 data = await resp.json()
                 if data.get("code") != 0:
                     raise Exception(f"Kling API Error: {data.get('message')}")
-
                 task_id = data["data"]["task_id"]
-
             await status_message.edit(content=f"🎬 Task accepted by Kling! (ID: {task_id})\nGenerating your {duration}s video. This usually takes 1-3 minutes...")
-
             poll_url = f"https://api.klingai.com/v1/videos/text2video/{task_id}"
             while True:
                 await asyncio.sleep(15)
                 async with session.get(poll_url, headers=headers) as poll_resp:
                     poll_data = await poll_resp.json()
                     status = poll_data.get("data", {}).get("task_status")
-
                     if status == "succeed":
                         video_url = poll_data["data"]["task_result"]["videos"][0]["url"]
                         async with session.get(video_url) as vid_resp:
@@ -374,10 +361,8 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
                             file=discord.File(io.BytesIO(video_bytes), filename="kling_render.mp4")
                         )
                         break
-
                     elif status in ["failed", 99]:
                         raise Exception("Kling internal server error during rendering.")
-
     except Exception as e:
         print(f"VIDEO ERROR: {e}")
         await status_message.edit(content=f"❌ **Video Generation Failed**\nError: `{str(e)}`")
@@ -385,19 +370,15 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
         video_jobs.pop(user_id, None)
 
 async def generate_music(prompt: str, user_id: int, status_message: discord.Message):
-    """Generate music using Pollinations AI."""
     global music_jobs
     encoded_prompt = urllib.parse.quote(prompt)
     url = f"{POLLINATIONS_AUDIO_URL}/{encoded_prompt}"
-
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; MultiGPT-Bot/1.0)",
         "Accept": "audio/mpeg,application/json,*/*"
     }
-
     if pollinations_api_key:
         headers["Authorization"] = f"Bearer {pollinations_api_key}"
-
     timeout = aiohttp.ClientTimeout(total=300)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -470,7 +451,6 @@ async def ai_call(prompt):
     except Exception as e:
         return f"❌ Error: {e}"
 
-# Countdown helpers
 def get_next_dec19(now: datetime) -> datetime:
     year = now.year
     target = datetime(year, 12, 19, 0, 0, 0, tzinfo=now.tzinfo)
@@ -517,7 +497,6 @@ def format_countdown_to_dec19(now: datetime) -> str:
         parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
     return ", ".join(parts)
 
-# Background task
 async def annoying_loop():
     while True:
         await asyncio.sleep(3 * 60 * 60)
@@ -534,7 +513,6 @@ async def annoying_loop():
             except Exception as e:
                 print(f"Error in annoying_loop: {e}")
 
-# Discord events
 @bot.event
 async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
@@ -564,7 +542,6 @@ async def on_message(message):
     txt = message.content.strip()
     cleaned_txt = txt.replace(bot.user.mention, "").strip()
 
-    # Help command
     if cleaned_txt == "/help":
         help_text = (
             "**🧠 MultiGPT Help Menu**\n\n"
@@ -609,7 +586,6 @@ async def on_message(message):
         )
         await message.channel.send(help_text)
         return
-
     # Video progress check
     if cleaned_txt == "/vp":
         user_id = message.author.id
@@ -890,7 +866,6 @@ async def on_message(message):
         saved_memory.append(("assistant", response))
         if len(saved_memory) > MAX_MEMORY:
             saved_memory.pop(0)
-
 
 # ------------------------------
 # Web server for health checks

@@ -7,13 +7,13 @@ import time
 import random
 import json
 import io
+import requests
+import jwt
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import calendar
 import discord
 from discord import Intents
-from aiohttp import web
-import requests
 
 # ------------------------------
 # Configuration
@@ -25,17 +25,16 @@ hf_token = os.getenv("HF_TOKEN")
 hf_token2 = os.getenv("HF_TOKEN2")
 hf_tokens = [t for t in [hf_token, hf_token2] if t]
 imgbb_api_key = os.getenv("HF_IMAGES")
-# HARDCODED FOR GITHUB DEPLOYMENT - ROTATE THIS KEY AFTER DEPLOYING!
 pollinations_api_key = os.getenv("POLLINATIONS_API_KEY") or "sk_e9Gh0E5vQH0UQUhiZ9gRdJCmTYspFtB9"
+
+# KLING API KEYS
+KLING_AK = "ACnpDdP33hhJ8ba3Yg4dKQC8EB3k3TaE"
+KLING_SK = "LCNGHNFdFCyF3TbNaY4PYrtTPfmAEenF"
 
 if not api_keys:
     print("FATAL: No GROQ_API_KEY or GROQ_API_KEY2 environment variables set!")
-    exit(1)
 
 api_url = "https://api.groq.com/openai/v1/chat/completions"
-
-# Official Pollinations unified endpoint (from docs)
-POLLINATIONS_VIDEO_URL = "https://gen.pollinations.ai/video"
 POLLINATIONS_AUDIO_URL = "https://gen.pollinations.ai/audio"
 
 MAX_SAVED = 5
@@ -61,7 +60,6 @@ current_mode = "chill"
 # HF state
 hf_key_index = 0
 current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
-hf_disabled_until = {}
 
 # Model management
 model_cooldowns = {}
@@ -75,13 +73,40 @@ current_model_list = smart_models
 current_model_index = 0
 current_llm = smart_models[0]
 
-# Video generation tracking
 video_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
-
-# Music generation tracking
 music_jobs = {}  # user_id -> {"status": str, "message": discord.Message, "prompt": str}
 
-# Mode prompts (unchanged)
+# ------------------------------
+# Helper functions
+# ------------------------------
+def get_kling_token():
+    """Generate a JWT token for Kling API using AK and SK"""
+    payload = {
+        "iss": KLING_AK,
+        "exp": int(time.time()) + 1800, 
+        "nbf": int(time.time()) - 5
+    }
+    return jwt.encode(payload, KLING_SK, algorithm="HS256")
+
+def load_pen_archive_from_github():
+    url = "https://raw.githubusercontent.com/Pen-123/upd-multigpt/refs/heads/main/archives.txt"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.text
+    except Exception:
+        pass
+    return ""
+
+pen_archive = load_pen_archive_from_github()
+
+def reset_defaults():
+    global ping_only, current_chat, memory_enabled, saved_memory, current_mode
+    ping_only = True
+    current_chat = None
+    memory_enabled = False
+    saved_memory.clear()
+    
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"

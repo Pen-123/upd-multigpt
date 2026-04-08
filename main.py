@@ -8,13 +8,12 @@ import random
 import json
 import io
 import requests
-import jwt
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import calendar
 import discord
 from discord import Intents
-from aiohttp import web  # ✅ CRITICAL FIX: Import web module
+from aiohttp import web
 
 # ------------------------------
 # Configuration
@@ -28,9 +27,10 @@ hf_tokens = [t for t in [hf_token, hf_token2] if t]
 imgbb_api_key = os.getenv("HF_IMAGES")
 pollinations_api_key = os.getenv("POLLINATIONS_API_KEY") or "sk_e9Gh0E5vQH0UQUhiZ9gRdJCmTYspFtB9"
 
-# KLING API KEYS
-KLING_AK = "ACnpDdP33hhJ8ba3Yg4dKQC8EB3k3TaE"
-KLING_SK = "LCNGHNFdFCyF3TbNaY4PYrtTPfmAEenF"
+# SiliconFlow API Key (used for video generation)
+siliconflow_api_key = os.getenv("SILICONFLOW_API_KEY")
+if not siliconflow_api_key:
+    print("⚠️ SILICONFLOW_API_KEY not set – video generation will fail.")
 
 if not api_keys:
     print("FATAL: No GROQ_API_KEY or GROQ_API_KEY2 environment variables set!")
@@ -80,15 +80,6 @@ music_jobs = {}
 # ------------------------------
 # Helper functions
 # ------------------------------
-def get_kling_token():
-    """Generate a JWT token for Kling API using AK and SK"""
-    payload = {
-        "iss": KLING_AK,
-        "exp": int(time.time()) + 1800,
-        "nbf": int(time.time()) - 5
-    }
-    return jwt.encode(payload, KLING_SK, algorithm="HS256")
-
 def load_pen_archive_from_github():
     url = "https://raw.githubusercontent.com/Pen-123/upd-multigpt/refs/heads/main/archives.txt"
     try:
@@ -113,7 +104,6 @@ def reset_defaults():
     saved_memory.clear()
     current_mode = "chill"
 
-# ✅ Fixed: Removed stray 'r' characters
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"
@@ -321,48 +311,71 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
+    """Generate video using SiliconFlow API."""
     global video_jobs
+    if not siliconflow_api_key:
+        await status_message.edit(content="❌ SiliconFlow API key not configured. Set SILICONFLOW_API_KEY.")
+        return
+
     try:
-        token = get_kling_token()
+        # SiliconFlow video generation endpoint
+        submit_url = "https://api.siliconflow.cn/v1/video/generations"
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {siliconflow_api_key}",
             "Content-Type": "application/json"
         }
-        duration = "10" if seconds > 5 else "5"
+
+        # Map seconds to a duration string acceptable by the model (e.g., "5s", "10s")
+        duration_str = f"{seconds}s"
+
         payload = {
-            "model_name": "kling-v1",
+            "model": "LTX-Video",           # SiliconFlow's text-to-video model
             "prompt": prompt,
-            "duration": duration
+            "duration": duration_str,       # e.g., "5s" or "10s"
+            "num_inference_steps": 50,      # Optional, adjust for quality/speed
+            "guidance_scale": 7.5           # Optional
         }
+
         async with aiohttp.ClientSession() as session:
-            submit_url = "https://api.klingai.com/v1/videos/text2video"
+            # Submit generation request
             async with session.post(submit_url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
-                    error_data = await resp.text()
-                    raise Exception(f"Kling Submission Failed ({resp.status}): {error_data}")
+                    error_text = await resp.text()
+                    raise Exception(f"SiliconFlow submission failed ({resp.status}): {error_text}")
                 data = await resp.json()
-                if data.get("code") != 0:
-                    raise Exception(f"Kling API Error: {data.get('message')}")
-                task_id = data["data"]["task_id"]
-            await status_message.edit(content=f"🎬 Task accepted by Kling! (ID: {task_id})\nGenerating your {duration}s video. This usually takes 1-3 minutes...")
-            poll_url = f"https://api.klingai.com/v1/videos/text2video/{task_id}"
-            while True:
-                await asyncio.sleep(15)
+                task_id = data.get("id")
+                if not task_id:
+                    raise Exception("No task ID returned from SiliconFlow.")
+
+            await status_message.edit(content=f"🎬 Video generation started (ID: {task_id})\nGenerating your {seconds}s clip. This may take 1–3 minutes...")
+
+            # Poll for completion
+            poll_url = f"https://api.siliconflow.cn/v1/video/status/{task_id}"
+            max_attempts = 30  # ~5 minutes max
+            for attempt in range(max_attempts):
+                await asyncio.sleep(10)
                 async with session.get(poll_url, headers=headers) as poll_resp:
+                    if poll_resp.status != 200:
+                        continue
                     poll_data = await poll_resp.json()
-                    status = poll_data.get("data", {}).get("task_status")
-                    if status == "succeed":
-                        video_url = poll_data["data"]["task_result"]["videos"][0]["url"]
+                    status = poll_data.get("status")
+                    if status == "succeeded":
+                        video_url = poll_data.get("video_url")
+                        if not video_url:
+                            raise Exception("No video URL in succeeded response.")
                         async with session.get(video_url) as vid_resp:
                             video_bytes = await vid_resp.read()
-                        await status_message.edit(content=f"✅ **Video Rendered!**\nPrompt: *{prompt}*")
+                        await status_message.edit(content=f"✅ **Video Ready!**\nPrompt: *{prompt}*")
                         await status_message.channel.send(
-                            content=f"Here is your {duration}s cinematic clip:",
-                            file=discord.File(io.BytesIO(video_bytes), filename="kling_render.mp4")
+                            content=f"Here is your {seconds}s video:",
+                            file=discord.File(io.BytesIO(video_bytes), filename="siliconflow_video.mp4")
                         )
                         break
-                    elif status in ["failed", 99]:
-                        raise Exception("Kling internal server error during rendering.")
+                    elif status == "failed":
+                        error_msg = poll_data.get("error", "Unknown error")
+                        raise Exception(f"Video generation failed: {error_msg}")
+            else:
+                raise Exception("Video generation timed out.")
     except Exception as e:
         print(f"VIDEO ERROR: {e}")
         await status_message.edit(content=f"❌ **Video Generation Failed**\nError: `{str(e)}`")
@@ -521,7 +534,7 @@ async def on_ready():
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    print(f"🎬 Video generation using Kling AI (AK: {KLING_AK[:4]}...)")
+    print(f"🎬 Video generation using SiliconFlow (API key {'set' if siliconflow_api_key else 'NOT SET'})")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -552,7 +565,7 @@ async def on_message(message):
             "`/unhinged` → Unfiltered mode (swears constantly)\n"
             "`/coder` → Programming expert mode\n"
             "`/childish` → Childish mode (meme slang)\n\n"
-            "**Video Generation (Kling AI):**\n"
+            "**Video Generation (SiliconFlow):**\n"
             "`/video <seconds> <prompt>` → Generate a video (max 10 seconds)\n"
             "`/vp` → Check status of your video\n\n"
             "**Music Generation (Pollinations AI):**\n"
@@ -586,6 +599,7 @@ async def on_message(message):
         )
         await message.channel.send(help_text)
         return
+
     # Video progress check
     if cleaned_txt == "/vp":
         user_id = message.author.id

@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import calendar
 import discord
 from discord import Intents
+from aiohttp import web  # <-- 修复：添加 aiohttp.web 导入
 
 # ------------------------------
 # Configuration
@@ -83,7 +84,7 @@ def get_kling_token():
     """Generate a JWT token for Kling API using AK and SK"""
     payload = {
         "iss": KLING_AK,
-        "exp": int(time.time()) + 1800, 
+        "exp": int(time.time()) + 1800,
         "nbf": int(time.time()) - 5
     }
     return jwt.encode(payload, KLING_SK, algorithm="HS256")
@@ -93,10 +94,14 @@ def load_pen_archive_from_github():
     try:
         response = requests.get(url)
         if response.status_code == 200:
+            print("[✅] Pen Archive loaded from GitHub")
             return response.text
-    except Exception:
-        pass
-    return ""
+        else:
+            print(f"[⚠️] Failed to fetch archive, status code {response.status_code}")
+            return ""
+    except Exception as e:
+        print(f"[❌] Error fetching archive: {e}")
+        return ""
 
 pen_archive = load_pen_archive_from_github()
 
@@ -106,7 +111,8 @@ def reset_defaults():
     current_chat = None
     memory_enabled = False
     saved_memory.clear()
-    
+    current_mode = "chill"
+
 mode_prompts = {
     "chill": (
         "You are MultiGPT - be as dumb as possible and act like you're a mission operative this is discord syntax **Bold text**: **Yo, this is bold!**\n"
@@ -192,32 +198,8 @@ FORBIDDEN_KEYWORDS = [
 ]
 
 # ------------------------------
-# Helper functions
+# Helper functions (continued)
 # ------------------------------
-def load_pen_archive_from_github():
-    url = "https://raw.githubusercontent.com/Pen-123/upd-multigpt/refs/heads/main/archives.txt"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            print("[✅] Pen Archive loaded from GitHub")
-            return response.text
-        else:
-            print(f"[⚠️] Failed to fetch archive, status code {response.status_code}")
-            return ""
-    except Exception as e:
-        print(f"[❌] Error fetching archive: {e}")
-        return ""
-
-pen_archive = load_pen_archive_from_github()
-
-def reset_defaults():
-    global ping_only, current_chat, memory_enabled, saved_memory, current_mode
-    ping_only = True
-    current_chat = None
-    memory_enabled = False
-    saved_memory.clear()
-    current_mode = "chill"
-
 def rotate_api_key():
     global key_index
     key = api_keys[key_index]
@@ -252,6 +234,7 @@ def get_next_available_model():
         if model_cooldowns.get(model, 0) <= now:
             current_model_index = next_index
             return model
+    # fallback – return first model even if cooled down
     return current_model_list[0]
 
 def has_forbidden_keywords(prompt: str) -> bool:
@@ -342,15 +325,6 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
             else:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
-def get_kling_token():
-    """Generates the mandatory JWT token for Kling API authentication."""
-    payload = {
-        "iss": KLING_AK,
-        "exp": int(time.time()) + 1800, # Token valid for 30 mins
-        "nbf": int(time.time()) - 5
-    }
-    return jwt.encode(payload, KLING_SK, algorithm="HS256")
-
 async def generate_video(seconds: int, prompt: str, user_id: int, status_message: discord.Message):
     """Kling AI Video Generation Logic: Submission + Polling"""
     global video_jobs
@@ -360,8 +334,7 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        
-        # Kling handles 5s or 10s. We'll map your 'seconds' input to the closest match.
+
         duration = "10" if seconds > 5 else "5"
         payload = {
             "model_name": "kling-v1",
@@ -370,65 +343,58 @@ async def generate_video(seconds: int, prompt: str, user_id: int, status_message
         }
 
         async with aiohttp.ClientSession() as session:
-            # Step 1: Submit the task to Kling
             submit_url = "https://api.klingai.com/v1/videos/text2video"
             async with session.post(submit_url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     error_data = await resp.text()
                     raise Exception(f"Kling Submission Failed ({resp.status}): {error_data}")
-                
+
                 data = await resp.json()
                 if data.get("code") != 0:
                     raise Exception(f"Kling API Error: {data.get('message')}")
-                
+
                 task_id = data["data"]["task_id"]
-            
+
             await status_message.edit(content=f"🎬 Task accepted by Kling! (ID: {task_id})\nGenerating your {duration}s video. This usually takes 1-3 minutes...")
 
-            # Step 2: Poll the API until the video is ready
             poll_url = f"https://api.klingai.com/v1/videos/text2video/{task_id}"
             while True:
-                await asyncio.sleep(15) # Poll every 15 seconds to avoid spamming
+                await asyncio.sleep(15)
                 async with session.get(poll_url, headers=headers) as poll_resp:
                     poll_data = await poll_resp.json()
                     status = poll_data.get("data", {}).get("task_status")
-                    
+
                     if status == "succeed":
                         video_url = poll_data["data"]["task_result"]["videos"][0]["url"]
-                        
-                        # Download the final video
                         async with session.get(video_url) as vid_resp:
                             video_bytes = await vid_resp.read()
-                        
                         await status_message.edit(content=f"✅ **Video Rendered!**\nPrompt: *{prompt}*")
                         await status_message.channel.send(
                             content=f"Here is your {duration}s cinematic clip:",
                             file=discord.File(io.BytesIO(video_bytes), filename="kling_render.mp4")
                         )
                         break
-                    
+
                     elif status in ["failed", 99]:
                         raise Exception("Kling internal server error during rendering.")
-                    
-                    # If status is 'submitted' or 'processing', the loop continues...
 
     except Exception as e:
         print(f"VIDEO ERROR: {e}")
         await status_message.edit(content=f"❌ **Video Generation Failed**\nError: `{str(e)}`")
     finally:
         video_jobs.pop(user_id, None)
-        
+
 async def generate_music(prompt: str, user_id: int, status_message: discord.Message):
     """Generate music using Pollinations AI."""
     global music_jobs
     encoded_prompt = urllib.parse.quote(prompt)
     url = f"{POLLINATIONS_AUDIO_URL}/{encoded_prompt}"
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; MultiGPT-Bot/1.0)",
         "Accept": "audio/mpeg,application/json,*/*"
     }
-    
+
     if pollinations_api_key:
         headers["Authorization"] = f"Bearer {pollinations_api_key}"
 
@@ -573,12 +539,12 @@ async def annoying_loop():
 async def on_ready():
     print(f"✅ MultiGPT ready as {bot.user.name}")
     print(f"🔑 Using {len(api_keys)} GROQ API keys")
-    print(f"🎬 Pollinations Video API key: {'✅ SET' if pollinations_api_key else '❌ NOT SET (will fail)'}")
     print(f"🎵 Pollinations Music endpoint: {POLLINATIONS_AUDIO_URL}")
     print(f"🎨 Image generation in {'SMART' if current_image_mode == 'smart' else 'FAST'} mode")
     print(f"🧠 Current mode: {current_mode.upper()}")
     print(f"🤖 HF Model: {current_hf_model}")
-    print(f"🎬 Video endpoint: {POLLINATIONS_VIDEO_URL}")
+    # 修复：移除了未定义的 POLLINATIONS_VIDEO_URL 打印，改为 Kling 状态打印
+    print(f"🎬 Video generation using Kling AI (AK: {KLING_AK[:4]}...)")
     asyncio.create_task(annoying_loop())
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help"))
 
@@ -587,15 +553,15 @@ async def on_message(message):
     global ping_only, current_chat, memory_enabled, current_llm, current_image_mode, current_mode
     global current_quality_mode, current_model_list, current_model_index
     global hf_key_index, current_hf_model, video_jobs, music_jobs
-    
+
     if message.author == bot.user:
         return
-        
+
     now = datetime.now().timestamp()
     if now - user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         return
     user_cooldowns[message.author.id] = now
-    
+
     txt = message.content.strip()
     cleaned_txt = txt.replace(bot.user.mention, "").strip()
 
@@ -610,9 +576,9 @@ async def on_message(message):
             "`/unhinged` → Unfiltered mode (swears constantly)\n"
             "`/coder` → Programming expert mode\n"
             "`/childish` → Childish mode (meme slang)\n\n"
-            "**Video Generation (Pollinations AI):**\n"
+            "**Video Generation (Kling AI):**\n"
             "`/video <seconds> <prompt>` → Generate a video (max 10 seconds)\n"
-            "`/vp` → Check status of your video  \n\n"
+            "`/vp` → Check status of your video\n\n"
             "**Music Generation (Pollinations AI):**\n"
             "`/music <prompt>` → Generate music/audio from text\n"
             "`/mp` → Check music generation status\n\n"
@@ -800,8 +766,8 @@ async def on_message(message):
 
     # Countdown command
     elif cleaned_txt == "/countdown":
-        now = datetime.now(TZ_UAE)
-        countdown = format_countdown_to_dec19(now)
+        now_dt = datetime.now(TZ_UAE)
+        countdown = format_countdown_to_dec19(now_dt)
         await message.channel.send(f"⏰ **Time until December 19:**\n{countdown}")
         return
 
@@ -871,16 +837,16 @@ async def on_message(message):
         if not prompt:
             await message.channel.send("❌ Please provide an image prompt.\nUsage: `/image a cat wearing sunglasses`")
             return
-        
+
         # Safety check for smart mode
         if current_image_mode == "smart":
             safety_result = await check_image_safety(prompt)
             if safety_result == "AI:STOPIMAGE":
                 await message.channel.send("🚫 **Image generation blocked:** This prompt contains inappropriate content.")
                 return
-        
+
         status_msg = await message.channel.send(f"🎨 Generating image: **{prompt}**...")
-        
+
         try:
             if current_image_mode == "fast":
                 # Fast mode: Pollinations
@@ -925,10 +891,10 @@ async def on_message(message):
 
     # Get AI response
     response = await ai_call(prompt)
-    
+
     # Clean up response (remove thinking tags if any)
     response = re.sub(r'<think>.*?<think>', '', response, flags=re.DOTALL).strip()
-    
+
     # Edit thinking message with response
     await thinking.edit(content=response[:2000] if len(response) <= 2000 else response[:1997] + "...")
 
@@ -950,7 +916,6 @@ async def handle_root(request):
 async def handle_health(request):
     return web.Response(text="OK")
 
-
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_root)
@@ -961,7 +926,6 @@ async def main():
     await site.start()
     print(f"🌐 Web server started on port {os.getenv('PORT', 10000)}")
     await bot.start(token)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

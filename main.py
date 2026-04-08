@@ -308,7 +308,7 @@ async def upload_image_to_hosting(image_data: bytes) -> str:
                 raise Exception(f"Image upload failed: {data.get('error', {}).get('message', 'Unknown error')}")
 
 async def generate_video(prompt: str, user_id: int, status_message: discord.Message):
-    """Generate video using SiliconFlow Wan2.2-T2V-A14B (live status + long timeout)."""
+    """Generate video using SiliconFlow Wan2.2-T2V-A14B - FIXED for new response format."""
     global video_jobs
     if not siliconflow_api_key:
         await status_message.edit(content="❌ SiliconFlow API key not configured. Set SILICONFLOW_API_KEY.")
@@ -331,7 +331,7 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
         }
 
         async with aiohttp.ClientSession() as session:
-            # Step 1: Submit
+            # Submit request
             async with session.post(submit_url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -341,10 +341,10 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
                 if not request_id:
                     raise Exception("No requestId returned from SiliconFlow.")
 
-            await status_message.edit(content=f"🎬 Video queued (ID: `{request_id}`)\nStatus: **InQueue** • This can take 2–10 minutes.")
+            await status_message.edit(content=f"🎬 Video queued (ID: `{request_id}`)\nStatus: **InQueue** • This can take 3–15 minutes.")
 
-            # Step 2: Poll with live updates
-            max_attempts = 90  # up to ~15 minutes
+            # Poll for completion with live updates
+            max_attempts = 120  # ~20 minutes
             for attempt in range(max_attempts):
                 await asyncio.sleep(10)
 
@@ -356,12 +356,19 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
 
                     if status == "Succeed":
                         results = poll_data.get("results", {})
-                        video_url = results.get("video_url")
+                        # FIXED: Wan2.2 returns video URL inside results["videos"][0]["url"]
+                        video_url = None
+                        videos = results.get("videos", [])
+                        if videos and isinstance(videos, list) and len(videos) > 0:
+                            video_url = videos[0].get("url") or videos[0].get("video_url")
+
                         if not video_url:
-                            raise Exception("No video URL in succeeded response.")
+                            raise Exception(f"No video URL found. Full results: {json.dumps(results)}")
+
                         # Download video
                         async with session.get(video_url) as vid_resp:
                             video_bytes = await vid_resp.read()
+
                         await status_message.edit(content=f"✅ **Video Ready!**\nPrompt: *{prompt}*")
                         await status_message.channel.send(
                             content=f"Here is your video:",
@@ -378,7 +385,7 @@ async def generate_video(prompt: str, user_id: int, status_message: discord.Mess
                         await status_message.edit(content=f"🎬 Video queued (ID: `{request_id}`)\nStatus: **{status}** • {attempt+1}/{max_attempts}")
 
             else:
-                raise Exception("Video generation timed out (15 minutes). Try again later.")
+                raise Exception("Video generation timed out (20 minutes). Try again later.")
 
     except Exception as e:
         print(f"VIDEO ERROR: {e}")
@@ -568,7 +575,7 @@ async def on_message(message):
             "`/childish` → Childish mode (meme slang)\n\n"
             "**Video Generation (SiliconFlow Wan2.2):**\n"
             "`/video <prompt>` → Generate a short video (5-6 seconds)\n"
-            "   • Can take 2–10 minutes (queue + generation)\n"
+            "   • Can take 3–15 minutes (queue + generation)\n"
             "`/vp` → Check live status of your video\n\n"
             "**Music Generation (Pollinations AI):**\n"
             "`/music <prompt>` → Generate music/audio from text\n"
@@ -625,7 +632,7 @@ async def on_message(message):
         if message.author.id in video_jobs:
             await message.channel.send("❌ You already have a video generating. Use `/vp` to check progress.")
             return
-        status_msg = await message.channel.send(f"🎬 Generating video for: **{prompt}**... This may take up to 10 minutes.")
+        status_msg = await message.channel.send(f"🎬 Generating video for: **{prompt}**... This may take up to 15 minutes.")
         video_jobs[message.author.id] = {
             "status": "generating",
             "message": status_msg,

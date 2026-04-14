@@ -265,33 +265,96 @@ async def generate_pollinations_image(prompt: str) -> bytes:
 
 async def generate_hf_image(prompt: str) -> bytes:
     global hf_key_index
+
     retries = 0
-    max_retries = 3
-    while retries < max_retries:
-        current_key = hf_tokens[hf_key_index]
-        API_URL = f"https://api-inference.huggingface.co/models/{current_hf_model}"
-        headers = {"Authorization": f"Bearer {current_key}"}
-        payload = {
-            "inputs": prompt,
-            "parameters": {"height": 1024, "width": 1024, "num_inference_steps": 50, "guidance_scale": 9}
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(API_URL, headers=headers, json=payload) as response:
-                    if response.status == 200:
-                        return await response.read()
-                    elif response.status == 429:
-                        error_text = await response.text()
-                        print(f"HF Rate limit on {current_hf_model}: {error_text}")
+    max_retries = 5
+
+    API_URL = f"https://api-inference.huggingface.co/models/{current_hf_model}"
+
+    headers_template = {
+        "Accept": "image/png"
+    }
+
+    async with aiohttp.ClientSession() as session:
+
+        while retries < max_retries:
+            current_key = hf_tokens[hf_key_index]
+
+            headers = {
+                **headers_template,
+                "Authorization": f"Bearer {current_key}"
+            }
+
+            payload = {
+                "inputs": prompt,
+                "parameters": {
+                    "height": 384,
+                    "width": 384,
+                    "num_inference_steps": 30,
+                    "guidance_scale": 7.5
+                }
+            }
+
+            try:
+                async with session.post(API_URL, headers=headers, json=payload, timeout=60) as response:
+
+                    content_type = response.headers.get("Content-Type", "")
+
+                    # ✅ SUCCESS
+                    if response.status == 200 and "image" in content_type:
+                        image_bytes = await response.read()
+
+                        if len(image_bytes) < 1000:
+                            raise Exception("Invalid image returned")
+
+                        return image_bytes
+
+                    # 🔑 INVALID KEY
+                    if response.status == 401:
                         hf_key_index = (hf_key_index + 1) % len(hf_tokens)
+                        print("🔑 Bad HF key, rotating...")
                         retries += 1
-                        await asyncio.sleep(2 ** retries)
-                    else:
-                        error_text = await response.text()
-                        raise Exception(f"HF API error {response.status}: {error_text}")
-        except Exception as e:
-            retries += 1
-            await asyncio.sleep(1)
+                        await asyncio.sleep(2)
+                        continue
+
+                    # 💀 MODEL LOADING / SERVER ISSUES
+                    if response.status in [503, 500]:
+                        try:
+                            data = await response.json(content_type=None)
+                            error_msg = data.get("error", "")
+
+                            if "loading" in error_msg.lower():
+                                wait_time = data.get("estimated_time", 10)
+                                print(f"⏳ Model loading, waiting {wait_time}s...")
+                                await asyncio.sleep(wait_time)
+                                continue
+                        except:
+                            pass
+
+                        retries += 1
+                        await asyncio.sleep(5)
+                        continue
+
+                    # 🧠 NORMAL ERROR PARSE
+                    try:
+                        data = await response.json(content_type=None)
+                        error_msg = data.get("error", "unknown error")
+                        print(f"HF ERROR: {error_msg}")
+                    except:
+                        print(f"HF RAW ERROR: {await response.text()[:200]}")
+
+                    # 🔁 RATE LIMIT
+                    if response.status == 429:
+                        hf_key_index = (hf_key_index + 1) % len(hf_tokens)
+
+                    retries += 1
+                    await asyncio.sleep(3)
+
+            except Exception as e:
+                print(f"HF REQUEST FAILED: {e}")
+                retries += 1
+                await asyncio.sleep(3)
+
     raise Exception("Max retries exceeded for HF image generation")
 
 async def upload_image_to_hosting(image_data: bytes) -> str:

@@ -60,7 +60,7 @@ current_mode = "chill"
 
 # HF state
 hf_key_index = 0
-current_hf_model = "stabilityai/stable-diffusion-xl-base-1.0"
+current_hf_model = "runwayml/stable-diffusion-v1-5"
 
 # Model management
 model_cooldowns = {}

@@ -45,9 +45,22 @@ HF_TOKENS = [
     t for t in [os.getenv("HF_TOKEN"), os.getenv("HF_TOKEN2")]
     if t
 ]
+
+# NEW: Read multiple SiliconFlow API keys
+SILICONFLOW_API_KEYS = []
+idx = 0
+while True:
+    key = os.getenv(f"SILICONFLOW_API_KEY{'' if idx == 0 else idx+1}")
+    if key:
+        SILICONFLOW_API_KEYS.append(key)
+        idx += 1
+    else:
+        break
+if not SILICONFLOW_API_KEYS:
+    logger.warning("No SILICONFLOW_API_KEY environment variables set! Video generation will fail.")
+
 IMGBB_API_KEY = os.getenv("HF_IMAGES")
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY") or "sk_e9Gh0E5vQH0UQUhiZ9gRdJCmTYspFtB9"
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
 
 # Constants
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -89,6 +102,7 @@ class MultiGPTBot(commands.Bot):
         # API key rotation
         self.groq_key_index = 0
         self.hf_key_index = 0
+        self.siliconflow_key_index = 0   # NEW
         self.last_key_rotation = 0
         self.model_cooldowns = {}
         
@@ -232,6 +246,15 @@ class MultiGPTBot(commands.Bot):
             self.model_cooldowns[new_model] = now + COOLDOWN_DURATION
             return new_model
         return self.current_llm
+
+    # NEW: SiliconFlow key rotation
+    def rotate_siliconflow_key(self) -> str:
+        """Returns the current SiliconFlow key and advances index for next call."""
+        if not SILICONFLOW_API_KEYS:
+            raise Exception("No SiliconFlow API keys configured")
+        key = SILICONFLOW_API_KEYS[self.siliconflow_key_index]
+        self.siliconflow_key_index = (self.siliconflow_key_index + 1) % len(SILICONFLOW_API_KEYS)
+        return key
 
     def has_forbidden_keywords(self, prompt: str) -> bool:
         lower_prompt = prompt.lower()
@@ -477,15 +500,18 @@ class MultiGPTBot(commands.Bot):
             return f"❌ Error: {e}"
 
     async def generate_video(self, prompt: str, user_id: int, status_message: discord.Message):
-        if not SILICONFLOW_API_KEY:
+        if not SILICONFLOW_API_KEYS:
             await status_message.edit(content="❌ SiliconFlow API key not configured.")
             return
         
         try:
             submit_url = "https://api.siliconflow.com/v1/video/submit"
             status_url = "https://api.siliconflow.com/v1/video/status"
+            
+            # Get initial key
+            api_key = self.rotate_siliconflow_key()
             headers = {
-                "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
             payload = {
@@ -495,20 +521,52 @@ class MultiGPTBot(commands.Bot):
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(submit_url, headers=headers, json=payload) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        raise Exception(f"Submission failed: {error_text}")
-                    data = await resp.json()
-                    request_id = data.get("requestId")
-                    if not request_id:
-                        raise Exception("No requestId returned")
+                # Submit video generation request with key rotation on failure
+                request_id = None
+                for submit_attempt in range(len(SILICONFLOW_API_KEYS) + 1):
+                    try:
+                        async with session.post(submit_url, headers=headers, json=payload) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                request_id = data.get("requestId")
+                                if request_id:
+                                    break
+                                else:
+                                    raise Exception("No requestId returned")
+                            elif resp.status == 429:
+                                # Rate limit, rotate key
+                                api_key = self.rotate_siliconflow_key()
+                                headers["Authorization"] = f"Bearer {api_key}"
+                                logger.warning("SiliconFlow rate limit, rotating key")
+                                await asyncio.sleep(2)
+                                continue
+                            else:
+                                error_text = await resp.text()
+                                raise Exception(f"Submission failed: {resp.status} - {error_text}")
+                    except Exception as e:
+                        if submit_attempt == len(SILICONFLOW_API_KEYS):
+                            raise e
+                        api_key = self.rotate_siliconflow_key()
+                        headers["Authorization"] = f"Bearer {api_key}"
+                        logger.warning(f"SiliconFlow submission error: {e}, rotating key")
+                        await asyncio.sleep(2)
+                
+                if not request_id:
+                    raise Exception("Failed to obtain requestId after all attempts")
                 
                 await status_message.edit(content=f"🎬 Video queued (ID: `{request_id}`)\nStatus: **InQueue** • This can take 3–15 minutes.")
                 
+                # Polling loop (with key rotation if needed)
                 for attempt in range(120):
                     await asyncio.sleep(10)
-                    async with session.post(status_url, headers=headers, json={"requestId": request_id}) as poll_resp:
+                    
+                    # For polling we can use the current key; if we hit rate limit, rotate
+                    poll_headers = {"Authorization": f"Bearer {api_key}"}
+                    async with session.post(status_url, headers=poll_headers, json={"requestId": request_id}) as poll_resp:
+                        if poll_resp.status == 429:
+                            # Rate limit on polling, rotate key
+                            api_key = self.rotate_siliconflow_key()
+                            continue
                         if poll_resp.status != 200:
                             continue
                         poll_data = await poll_resp.json()

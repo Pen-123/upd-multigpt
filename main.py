@@ -69,7 +69,7 @@ class MultiGPTBot(commands.Bot):
         super().__init__(
             command_prefix=commands.when_mentioned,
             intents=intents,
-            help_command=None,  # Custom help
+            help_command=None,
             activity=discord.Activity(type=discord.ActivityType.playing, name="Ask me anything! | /help")
         )
         # State variables
@@ -283,86 +283,141 @@ class MultiGPTBot(commands.Bot):
                 else:
                     raise Exception(f"Pollinations image error {response.status}")
 
+    async def _wait_for_hf_model_ready(self, session: aiohttp.ClientSession, headers: dict) -> bool:
+        """Check if HF model is loaded and ready."""
+        status_url = f"https://api-inference.huggingface.co/status/{self.current_hf_model}"
+        try:
+            async with session.get(status_url, headers=headers, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    state = data.get("state", "unknown")
+                    if state == "Loadable":
+                        return True
+                    elif state == "Loaded":
+                        return True
+                    elif state == "TooBig":
+                        return True  # It's loaded but big
+                    else:
+                        logger.info(f"Model state: {state}, waiting...")
+                return False
+        except Exception:
+            return False
+
     async def generate_hf_image(self, prompt: str) -> bytes:
-        """Improved HF image generation with proper retry logic and key rotation."""
-        max_retries = 5
-        base_delay = 2
+        """
+        Robust HF image generation with:
+        - Key rotation
+        - Model warmup wait
+        - Extended retries
+        - Fallback to Pollinations on persistent failure
+        """
+        max_attempts = 8
+        base_delay = 3
         api_url = f"https://api-inference.huggingface.co/models/{self.current_hf_model}"
         
-        for attempt in range(max_retries):
-            current_key = HF_TOKENS[self.hf_key_index] if HF_TOKENS else None
-            if not current_key:
-                raise Exception("No Hugging Face tokens configured")
+        if not HF_TOKENS:
+            raise Exception("No Hugging Face tokens configured")
+        
+        async with aiohttp.ClientSession() as session:
+            # First, try to ensure model is ready
+            for warmup_attempt in range(3):
+                current_key = HF_TOKENS[self.hf_key_index]
+                headers = {"Authorization": f"Bearer {current_key}"}
+                if await self._wait_for_hf_model_ready(session, headers):
+                    logger.info("HF model is ready")
+                    break
+                logger.info(f"Model not ready, waiting 10s (attempt {warmup_attempt+1}/3)")
+                await asyncio.sleep(10)
+                self.hf_key_index = (self.hf_key_index + 1) % len(HF_TOKENS)
             
-            headers = {
-                "Authorization": f"Bearer {current_key}",
-                "Accept": "image/png"
-            }
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "height": 384,
-                    "width": 384,
-                    "num_inference_steps": 30,
-                    "guidance_scale": 7.5
+            # Now attempt image generation
+            for attempt in range(max_attempts):
+                current_key = HF_TOKENS[self.hf_key_index]
+                headers = {
+                    "Authorization": f"Bearer {current_key}",
+                    "Accept": "image/png",
+                    "Content-Type": "application/json"
                 }
-            }
-            
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(api_url, headers=headers, json=payload, timeout=60) as resp:
-                        # Success case
-                        if resp.status == 200:
-                            content_type = resp.headers.get("Content-Type", "")
-                            if "image" in content_type:
-                                image_bytes = await resp.read()
-                                if len(image_bytes) > 1000:
-                                    return image_bytes
-                                raise Exception("Received invalid/corrupted image")
+                payload = {
+                    "inputs": prompt,
+                    "parameters": {
+                        "height": 384,
+                        "width": 384,
+                        "num_inference_steps": 30,
+                        "guidance_scale": 7.5,
+                        "wait_for_model": True  # Let HF handle waiting
+                    },
+                    "options": {
+                        "wait_for_model": True,
+                        "use_cache": False
+                    }
+                }
+                
+                try:
+                    async with session.post(
+                        api_url, 
+                        headers=headers, 
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=120)  # 2 minutes max
+                    ) as resp:
+                        content_type = resp.headers.get("Content-Type", "")
                         
-                        # Handle errors
+                        if resp.status == 200 and "image" in content_type:
+                            image_bytes = await resp.read()
+                            if len(image_bytes) > 1000:
+                                logger.info(f"HF image generated successfully on attempt {attempt+1}")
+                                return image_bytes
+                            raise Exception("Received invalid/corrupted image")
+                        
+                        # Parse error
                         error_text = await resp.text()
                         logger.warning(f"HF attempt {attempt+1}: {resp.status} - {error_text[:200]}")
                         
-                        # Model loading
+                        # Handle specific errors
                         if resp.status == 503:
+                            # Model loading
                             try:
                                 data = json.loads(error_text)
                                 if "loading" in data.get("error", "").lower():
-                                    wait = data.get("estimated_time", 20)
+                                    wait = data.get("estimated_time", 30)
                                     logger.info(f"Model loading, waiting {wait}s...")
-                                    await asyncio.sleep(wait)
+                                    await asyncio.sleep(min(wait, 60))
                                     continue
                             except:
                                 pass
                             await asyncio.sleep(base_delay * (attempt + 1))
                             continue
                         
-                        # Rate limit
                         if resp.status == 429:
+                            # Rate limit - rotate key
                             self.hf_key_index = (self.hf_key_index + 1) % len(HF_TOKENS)
                             logger.info("Rate limited, rotating HF key")
-                            await asyncio.sleep(5)
+                            await asyncio.sleep(8)
                             continue
                         
-                        # Auth error
-                        if resp.status == 401:
+                        if resp.status == 401 or resp.status == 403:
+                            # Invalid key - rotate
                             self.hf_key_index = (self.hf_key_index + 1) % len(HF_TOKENS)
-                            logger.warning("HF key unauthorized, rotating")
+                            logger.warning(f"HF key unauthorized (status {resp.status}), rotating")
                             await asyncio.sleep(2)
                             continue
                         
-                        # Other errors
+                        # Other errors - wait and retry
                         await asyncio.sleep(base_delay * (attempt + 1))
                         
-            except asyncio.TimeoutError:
-                logger.warning(f"HF request timeout, attempt {attempt+1}")
-                await asyncio.sleep(5)
+                except asyncio.TimeoutError:
+                    logger.warning(f"HF request timeout, attempt {attempt+1}")
+                    await asyncio.sleep(10)
+                except Exception as e:
+                    logger.error(f"HF request exception: {e}")
+                    await asyncio.sleep(5)
+            
+            # All HF attempts failed, fallback to Pollinations
+            logger.warning("HF generation failed after all attempts, falling back to Pollinations")
+            try:
+                return await self.generate_pollinations_image(prompt)
             except Exception as e:
-                logger.error(f"HF request error: {e}")
-                await asyncio.sleep(3)
-        
-        raise Exception(f"Max retries ({max_retries}) exceeded for HF image generation")
+                raise Exception(f"Both HF and Pollinations failed. Last error: {e}")
 
     async def upload_image_to_hosting(self, image_data: bytes) -> str:
         if not IMGBB_API_KEY:
@@ -451,7 +506,7 @@ class MultiGPTBot(commands.Bot):
                 
                 await status_message.edit(content=f"🎬 Video queued (ID: `{request_id}`)\nStatus: **InQueue** • This can take 3–15 minutes.")
                 
-                for attempt in range(120):  # ~20 minutes
+                for attempt in range(120):
                     await asyncio.sleep(10)
                     async with session.post(status_url, headers=headers, json={"requestId": request_id}) as poll_resp:
                         if poll_resp.status != 200:
@@ -827,6 +882,7 @@ async def music_progress(ctx: commands.Context):
 @bot.hybrid_command(name="image", description="Generate an image from a text prompt")
 @app_commands.describe(prompt="Description of the image to generate")
 async def image_command(ctx: commands.Context, prompt: str):
+    # Safety check only in smart mode
     if bot.current_image_mode == "smart":
         safety_result = await bot.check_image_safety(prompt)
         if safety_result == "AI:STOPIMAGE":
@@ -877,7 +933,7 @@ async def handle_chat_slot(interaction: discord.Interaction, slot: int):
         bot.current_chat = chat_id
         await interaction.response.send_message(f"💾 Created new chat slot **{slot}**")
 
-# Prefix fallback for sc1-5 (to maintain compatibility with old users)
+# Prefix fallback for sc1-5
 @bot.command(name="sc1")
 async def prefix_sc1(ctx: commands.Context):
     await handle_chat_slot_prefix(ctx, 1)
@@ -916,25 +972,20 @@ async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
     
-    # Process commands first
     await bot.process_commands(message)
     
-    # Cooldown check
     now = datetime.now().timestamp()
     if now - bot.user_cooldowns.get(message.author.id, 0) < USER_COOLDOWN_SECONDS:
         return
     bot.user_cooldowns[message.author.id] = now
     
-    # Only respond if pinged or ping-only off
     if bot.ping_only and bot.user.mention not in message.content:
         return
     
-    # Extract prompt
     prompt = message.content.replace(bot.user.mention, "").strip()
     if not prompt:
         return
     
-    # Save to chat/memory
     if bot.current_chat:
         if bot.current_chat not in bot.saved_chats:
             bot.saved_chats[bot.current_chat] = []
@@ -947,7 +998,6 @@ async def on_message(message: discord.Message):
         if len(bot.saved_memory) > MAX_MEMORY:
             bot.saved_memory.pop(0)
     
-    # Generate response
     thinking = await message.channel.send("🤔 MultiGPT is thinking...")
     response = await bot.ai_call(prompt)
     response = re.sub(r'<think>.*?<think>', '', response, flags=re.DOTALL).strip()
@@ -966,7 +1016,7 @@ async def on_message(message: discord.Message):
 async def annoying_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
-        await asyncio.sleep(3 * 60 * 60)  # Every 3 hours
+        await asyncio.sleep(3 * 60 * 60)
         for channel_id in list(bot.annoying_channels):
             try:
                 channel = bot.get_channel(channel_id)

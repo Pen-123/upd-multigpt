@@ -173,7 +173,7 @@ class MultiGPTBot(commands.Bot):
         }
         
         self.allowed_llms = {
-            "kimi-k2": "moonshotai/kimi-k2-instruct-0905",
+            "compound-mini": "groq/compound-mini",
             "gpt-oss": "openai/gpt-oss-20b",
             "gemma2-9b": "google/gemma2-9b-it"
         }
@@ -793,7 +793,7 @@ async def current_llm(ctx: commands.Context):
     await ctx.send(f"🤖 Current LLM: `{bot.current_llm}`")
 
 @bot.hybrid_command(name="change_llm", description="Change the LLM model")
-@app_commands.describe(name="LLM name (kimi-k2, gpt-oss, gemma2-9b)")
+@app_commands.describe(name="LLM name (compound-mini, gpt-oss, gemma2-9b)")
 async def change_llm(ctx: commands.Context, name: str):
     if name in bot.allowed_llms:
         bot.current_llm = bot.allowed_llms[name]
@@ -801,14 +801,14 @@ async def change_llm(ctx: commands.Context, name: str):
     else:
         await ctx.send(f"❌ Unknown LLM. Available: {', '.join(bot.allowed_llms.keys())}")
 
-@bot.hybrid_command(name="fast", description="Switch to fast mode (kimi-k2 + Pollinations images)")
+@bot.hybrid_command(name="fast", description="Switch to fast mode (compound-mini + Pollinations images)")
 async def fast_mode(ctx: commands.Context):
     bot.current_quality_mode = "fast"
-    bot.current_model_list = ["moonshotai/kimi-k2-instruct-0905"]
+    bot.current_model_list = ["groq/compound-mini"]
     bot.current_model_index = 0
-    bot.current_llm = "moonshotai/kimi-k2-instruct-0905"
+    bot.current_llm = "groq/compound-mini"
     bot.current_image_mode = "fast"
-    await ctx.send("⚡ **FAST MODE** enabled (kimi-k2 + Pollinations images)")
+    await ctx.send("⚡ **FAST MODE** enabled (compound-mini + Pollinations images)")
 
 @bot.hybrid_command(name="smart", description="Switch to smart mode (gpt-oss + Hugging Face images)")
 async def smart_mode(ctx: commands.Context):
